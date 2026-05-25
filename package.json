@@ -1,0 +1,27 @@
+{
+  "name": "circles-mini-app",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "tunnel": "cloudflared tunnel --url http://localhost:5173",
+    "deploy": "npm run build && wrangler pages deploy dist --project-name=circles-shorts --branch=main --commit-dirty=true",
+    "deploy:pinata": "npm run build && node scripts/deploy-pinata.mjs"
+  },
+  "dependencies": {
+    "@aboutcircles/miniapp-sdk": "^0.1.31",
+    "@aboutcircles/sdk-core": "^0.1.32",
+    "@aboutcircles/sdk-profiles": "^0.1.32",
+    "@aboutcircles/sdk-rpc": "^0.1.32",
+    "@aboutcircles/sdk-transfers": "^0.1.32",
+    "@aboutcircles/sdk-utils": "^0.1.32",
+    "viem": "^2.50.4"
+  },
+  "devDependencies": {
+    "vite": "^6.4.1",
+    "wrangler": "^4.93.1"
+  }
+}

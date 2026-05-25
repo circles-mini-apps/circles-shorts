@@ -1,0 +1,23 @@
+You are building on the Circles protocol (Gnosis Chain, chainId 100).
+
+Whenever I ask about anything involving Circles, CRC, trust graphs, avatars,
+pathfinding, group minting, or any package starting with @aboutcircles/,
+automatically use the Context7 MCP server to fetch the latest docs from
+the aboutcircles/sdk and aboutcircles/circles-docs libraries before writing code.
+
+Context7 library IDs (use directly when possible):
+- `/aboutcircles/sdk` — transfers, RPC, pathfinding, high-level workflows
+- `aboutcircles/circles-docs` — protocol and product documentation
+
+Never use the deprecated @circles-sdk/* packages. Always prefer:
+  - @aboutcircles/sdk for high-level avatar workflows
+  - @aboutcircles/sdk-rpc for read-only data queries
+  - @aboutcircles/sdk-core for raw contract calls
+  - @aboutcircles/sdk-runner for Safe transaction execution
+  - viem (not ethers) as the underlying client
+
+Default to circlesConfig[100] from @aboutcircles/sdk-core for all Gnosis Chain config.
+All token amounts are BigInt in atto-CRC (10^18 per CRC).
+
+If Context7 is unavailable, fall back to installed packages in node_modules/@aboutcircles/
+and https://docs.aboutcircles.com — never invent method names.

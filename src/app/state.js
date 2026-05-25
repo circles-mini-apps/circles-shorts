@@ -1,0 +1,303 @@
+import { listShorts, reconcileAllModeration } from '../data/storage.js';
+
+/** @typedef {'disconnected' | 'connecting' | 'connected' | 'error'} WalletPhase */
+/** @typedef {'recent' | 'top'} SortMode */
+/** @typedef {'list' | 'create' | 'detail' | 'profile'} View */
+/** @typedef {'published' | 'upvoted' | 'commented'} ProfileTab */
+
+export const state = {
+  /** @type {WalletPhase} */
+  walletPhase: 'disconnected',
+  /** @type {`0x${string}` | null} */
+  connectedAddress: null,
+  /** @type {Record<string, unknown>} */
+  hostContext: {},
+  /** @type {{ kind: 'idle' | 'pending' | 'success' | 'error'; message: string }} */
+  status: { kind: 'idle', message: '' },
+  /** @type {View} */
+  view: 'list',
+  /** @type {string | null} */
+  selectedShortId: null,
+  /** Show the flag report form on detail view (opened via 🚩). */
+  /** @type {boolean} */
+  flagFormOpen: false,
+
+  // Browsing controls
+  /** @type {string} */
+  search: '',
+  /** @type {boolean} */
+  searchOpen: false,
+  /** @type {string[]} */
+  filterCategories: [],
+  /** @type {boolean} */
+  filterOpen: false,
+  /** @type {string} */
+  filterQuery: '',
+  /** @type {SortMode} */
+  sort: 'recent',
+
+  // Create form draft
+  createDraft: {
+    title: '',
+    url: '',
+    /** @type {string[]} */
+    categories: [],
+  },
+  /** @type {boolean} */
+  createCategoryOpen: false,
+  /** @type {string} */
+  createCategoryQuery: '',
+
+  /** Profile view active tab. */
+  /** @type {ProfileTab} */
+  profileTab: 'published',
+
+  /** @type {ReturnType<typeof listShorts>} */
+  shorts: [],
+
+  /** True while the cross-user feed is being fetched from Pinata + IPFS. */
+  /** @type {boolean} */
+  feedLoading: false,
+  /** @type {string | null} */
+  feedError: null,
+  /** @type {number | null} */
+  feedLastSyncedAt: null,
+
+  /** Profile cache by checksum address. */
+  /** @type {Record<string, { name: string | null, imageUrl: string | null, loaded: boolean }>} */
+  profiles: {},
+
+  /** How many shorts to show before lazy-loading more. */
+  /** @type {number} */
+  listVisibleCount: 10,
+
+  /** Restored list scroll Y when returning from detail. */
+  /** @type {number | null} */
+  listScrollY: null,
+  /** @type {{ scrollY: number, visibleCount: number } | null} */
+  pendingListRestore: null,
+};
+
+export const LIST_PAGE_SIZE = 10;
+
+const listeners = new Set();
+const statusListeners = new Set();
+
+export function subscribe(fn) {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
+export function subscribeStatus(fn) {
+  statusListeners.add(fn);
+  return () => statusListeners.delete(fn);
+}
+
+function notify() {
+  for (const fn of listeners) fn();
+}
+
+function notifyStatus() {
+  for (const fn of statusListeners) fn();
+}
+
+export function refreshShorts() {
+  reconcileAllModeration();
+  state.shorts = listShorts();
+  notify();
+}
+
+export function setFeedLoading(loading) {
+  state.feedLoading = Boolean(loading);
+  notify();
+}
+
+export function setFeedError(message) {
+  state.feedError = message || null;
+  notify();
+}
+
+export function markFeedSynced() {
+  state.feedLastSyncedAt = Date.now();
+  state.feedError = null;
+  notify();
+}
+
+export function setWalletPhase(phase) {
+  state.walletPhase = phase;
+  notify();
+}
+
+export function setConnectedAddress(address) {
+  state.connectedAddress = address;
+  notify();
+}
+
+export function applyHostContext(data) {
+  state.hostContext = { ...state.hostContext, ...data };
+  notify();
+}
+
+export function resetAccountScopedState() {
+  setStatus('idle', '');
+}
+
+const STATUS_DISMISS_MS = 4000;
+/** @type {ReturnType<typeof setTimeout> | null} */
+let statusDismissTimer = null;
+
+export function setStatus(kind, message) {
+  if (statusDismissTimer) {
+    clearTimeout(statusDismissTimer);
+    statusDismissTimer = null;
+  }
+
+  state.status = { kind, message };
+  notifyStatus();
+
+  if (kind === 'success' || kind === 'error') {
+    const captured = message;
+    statusDismissTimer = setTimeout(() => {
+      statusDismissTimer = null;
+      if (state.status.kind === kind && state.status.message === captured) {
+        setStatus('idle', '');
+      }
+    }, STATUS_DISMISS_MS);
+  }
+}
+
+export function resetListPagination() {
+  state.listVisibleCount = LIST_PAGE_SIZE;
+}
+
+export function loadMoreListItems() {
+  state.listVisibleCount += LIST_PAGE_SIZE;
+  notify();
+}
+
+export function setView(view, selectedShortId = null, options = {}) {
+  const from = state.view;
+
+  if (from === 'list' && view === 'detail') {
+    state.pendingListRestore = {
+      scrollY: window.scrollY,
+      visibleCount: state.listVisibleCount,
+    };
+  } else if (view === 'list' && from === 'detail' && state.pendingListRestore) {
+    state.listVisibleCount = state.pendingListRestore.visibleCount;
+    state.listScrollY = state.pendingListRestore.scrollY;
+    state.pendingListRestore = null;
+  } else if (!(from === 'list' && view === 'detail')) {
+    resetListPagination();
+    state.pendingListRestore = null;
+    state.listScrollY = null;
+  }
+
+  state.view = view;
+  state.selectedShortId = selectedShortId;
+  state.flagFormOpen = view === 'detail' && Boolean(options.openFlagForm);
+  setStatus('idle', '');
+  state.filterOpen = false;
+  state.createCategoryOpen = false;
+  if (view === 'create') {
+    state.createDraft = { title: '', url: '', categories: [] };
+    state.createCategoryQuery = '';
+  }
+  notify();
+}
+
+export function setFlagFormOpen(open) {
+  state.flagFormOpen = Boolean(open);
+  notify();
+}
+
+export function setProfileTab(tab) {
+  state.profileTab = tab;
+  resetListPagination();
+  notify();
+}
+
+export function setSearch(search) {
+  state.search = search;
+  resetListPagination();
+  notify();
+}
+
+export function setSearchOpen(open) {
+  state.searchOpen = Boolean(open);
+  notify();
+}
+
+export function toggleSort() {
+  state.sort = state.sort === 'recent' ? 'top' : 'recent';
+  resetListPagination();
+  notify();
+}
+
+export function toggleFilterCategory(category) {
+  const c = String(category).trim();
+  if (!c) return;
+  const has = state.filterCategories.some((x) => x.toLowerCase() === c.toLowerCase());
+  state.filterCategories = has
+    ? state.filterCategories.filter((x) => x.toLowerCase() !== c.toLowerCase())
+    : [...state.filterCategories, c];
+  resetListPagination();
+  notify();
+}
+
+export function clearFilterCategories() {
+  state.filterCategories = [];
+  resetListPagination();
+  notify();
+}
+
+export function setFilterOpen(open) {
+  state.filterOpen = Boolean(open);
+  if (!state.filterOpen) state.filterQuery = '';
+  notify();
+}
+
+export function setFilterQuery(q) {
+  state.filterQuery = q;
+  notify();
+}
+
+export function setSort(sort) {
+  state.sort = sort;
+  notify();
+}
+
+export function setCreateDraft(patch) {
+  state.createDraft = { ...state.createDraft, ...patch };
+  notify();
+}
+
+export function toggleCreateCategory(category) {
+  const c = String(category).trim();
+  if (!c) return;
+  const cats = state.createDraft.categories;
+  const has = cats.some((x) => x.toLowerCase() === c.toLowerCase());
+  state.createDraft = {
+    ...state.createDraft,
+    categories: has
+      ? cats.filter((x) => x.toLowerCase() !== c.toLowerCase())
+      : [...cats, c],
+  };
+  notify();
+}
+
+export function setCreateCategoryOpen(open) {
+  state.createCategoryOpen = Boolean(open);
+  if (!state.createCategoryOpen) state.createCategoryQuery = '';
+  notify();
+}
+
+export function setCreateCategoryQuery(q) {
+  state.createCategoryQuery = q;
+  notify();
+}
+
+export function setProfiles(patch) {
+  state.profiles = { ...state.profiles, ...patch };
+  notify();
+}

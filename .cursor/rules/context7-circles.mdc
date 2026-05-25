@@ -1,0 +1,42 @@
+---
+description: Use Context7 for live Circles docs and SDK APIs (avoid outdated/hallucinated APIs)
+alwaysApply: true
+---
+
+# Context7 + Circles
+
+When working on this mini app, **use Context7 MCP** for Circles-related APIs, patterns, and examples. Do not rely on training data for `@aboutcircles/*` packages or miniapp host behavior.
+
+## When to fetch docs
+
+- `@aboutcircles/miniapp-sdk` — `isMiniappMode`, `onWalletChange`, `sendTransactions`, `signMessage`, host bridge
+- `@aboutcircles/sdk-transfers` — `TransferBuilder`, `constructAdvancedTransfer`
+- `@aboutcircles/sdk-utils` — `encodeCrcV2TransferData`, `circlesConfig`
+- Embedded miniapp flows — wallet lifecycle, tx formatting (`to`, `data`, `value` hex), action pipeline
+- CRC transfers, pathfinding, RPC, trust paths, publish/upvote flows
+
+## Context7 library IDs (use directly to skip search)
+
+| Topic | Context7 ID / source |
+|--------|----------------------|
+| Circles SDK v2 (transfers, RPC, core) | `/aboutcircles/sdk` |
+| Official miniapps docs | Query: `embedded mini apps sendTransactions` on docs.aboutcircles.com, or use Context7 `resolve-library-id` for `aboutcircles` |
+| Payment / Gnosis patterns | `/aboutcircles/circles-gnosisapp-starter-kit` |
+
+Example prompts for the agent:
+
+```
+use context7 with /aboutcircles/sdk for TransferBuilder constructAdvancedTransfer
+use context7 for @aboutcircles/miniapp-sdk sendTransactions format
+```
+
+## This project's conventions (after fetching docs)
+
+- **Host signing**: trivial txs go straight to `sendTransactions` ([`src/host/testSign.js`](src/host/testSign.js)); CRC txs need `TransferBuilder` + RPC first ([`src/chain/executeTransfer.js`](src/chain/executeTransfer.js)).
+- **Tx adapter**: always format via [`formatTxForHost`](src/host/bridge.js) — `value` as hex, `data` as `0x…`.
+- **Host RPC**: read `circlesRpcUrl` from host app data ([`src/chain/hostRpc.js`](src/chain/hostRpc.js)); do not assume public RPC works from an iframe.
+- **Publish**: 1 CRC unlock then one idea ([`src/data/publishUnlock.js`](src/data/publishUnlock.js)).
+
+## If Context7 is unavailable
+
+Fall back to installed packages in `node_modules/@aboutcircles/` and https://docs.aboutcircles.com/miniapps/embedded-mini-apps — never invent method names.
