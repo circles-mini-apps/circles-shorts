@@ -1,8 +1,6 @@
-/**
- * Resolve video runtime from supported hosts (lazy, cached in localStorage).
- */
+import { parseIso8601Duration } from '../utils/duration.js';
 
-const CACHE_KEY = 'circles-shorts:video-duration:v1';
+const CACHE_KEY = 'circles-shorts:video-duration:v2';
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_CONCURRENT = 2;
 
@@ -135,7 +133,39 @@ function loadYouTubeIframeApi() {
 }
 
 /** @param {string} videoId */
-async function fetchYouTubeDuration(videoId) {
+async function fetchYouTubeDurationViaProxy(videoId) {
+  try {
+    const res = await fetch(`/api/youtube-duration/${encodeURIComponent(videoId)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const seconds = data?.durationSeconds;
+    return typeof seconds === 'number' && seconds > 0 ? Math.round(seconds) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** @param {string} videoId */
+async function fetchYouTubeDurationViaDataApi(videoId) {
+  const key = import.meta.env.VITE_YOUTUBE_API_KEY?.trim();
+  if (!key) return null;
+  try {
+    const url = new URL('https://www.googleapis.com/youtube/v3/videos');
+    url.searchParams.set('part', 'contentDetails');
+    url.searchParams.set('id', videoId);
+    url.searchParams.set('key', key);
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const iso = data?.items?.[0]?.contentDetails?.duration;
+    return parseIso8601Duration(iso);
+  } catch {
+    return null;
+  }
+}
+
+/** @param {string} videoId */
+async function fetchYouTubeDurationIframe(videoId) {
   await loadYouTubeIframeApi();
   if (!window.YT?.Player) return null;
 
@@ -185,6 +215,17 @@ async function fetchYouTubeDuration(videoId) {
       finish(null);
     }
   });
+}
+
+/** @param {string} videoId */
+async function fetchYouTubeDuration(videoId) {
+  const fromDataApi = await fetchYouTubeDurationViaDataApi(videoId);
+  if (fromDataApi) return fromDataApi;
+
+  const fromProxy = await fetchYouTubeDurationViaProxy(videoId);
+  if (fromProxy) return fromProxy;
+
+  return fetchYouTubeDurationIframe(videoId);
 }
 
 async function fetchOembedDuration(oembedUrl) {

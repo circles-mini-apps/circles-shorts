@@ -1,4 +1,5 @@
 import { defineConfig, loadEnv } from 'vite';
+import { fetchYoutubeDurationInnertube } from './lib/youtubeInnertubeDuration.js';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
@@ -24,5 +25,25 @@ export default defineConfig(({ mode }) => {
           }
         : {}),
     },
+    plugins: [
+      {
+        name: 'youtube-duration-api',
+        configureServer(server) {
+          server.middlewares.use(async (req, res, next) => {
+            const m = req.url?.match(/^\/api\/youtube-duration\/([\w-]{11})$/);
+            if (!m) return next();
+            try {
+              const durationSeconds = await fetchYoutubeDurationInnertube(m[1]);
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ durationSeconds }));
+            } catch {
+              res.statusCode = 502;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ durationSeconds: null }));
+            }
+          });
+        },
+      },
+    ],
   };
 });

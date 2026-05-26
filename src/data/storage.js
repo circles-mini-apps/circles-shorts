@@ -100,8 +100,6 @@ export function commentShort(id, { by, text, cid = null }) {
   if (!short) throw new Error('Short not found');
   const comment = { id: uid(), by, text, createdAt: nowMs(), cid };
   short.comments = [...(short.comments || []), comment];
-  short.upvotes = (short.upvotes || 0) + 1;
-  short.voters = Array.from(new Set([...(short.voters || []), by]));
   write(state);
   return { short, comment };
 }
@@ -255,7 +253,6 @@ export function upsertRemoteComment({ shortCid, commentCid, by, text, createdAt 
   const short = findShort(state, { cid: shortCid });
   if (!short) return null;
   short.comments = short.comments || [];
-  short.voters = short.voters || [];
   const alreadyById = commentCid && short.comments.some((c) => c.cid === commentCid);
   if (!alreadyById) {
     short.comments.push({
@@ -266,12 +263,17 @@ export function upsertRemoteComment({ shortCid, commentCid, by, text, createdAt 
       cid: commentCid || null,
     });
   }
-  if (by && !short.voters.some((v) => v.toLowerCase() === by.toLowerCase())) {
-    short.voters.push(by);
-  }
-  short.upvotes = short.voters.length;
   write(state);
   return short;
+}
+
+export function resetAllUpvoteCounts() {
+  const state = read();
+  for (const short of state.shorts) {
+    short.voters = [];
+    short.upvotes = 0;
+  }
+  write(state);
 }
 
 export function upsertRemoteUpvote({ shortCid, voter }) {

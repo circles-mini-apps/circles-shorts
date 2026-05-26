@@ -1,3 +1,15 @@
+/** Parse YouTube Data API duration (e.g. PT4M13S). */
+export function parseIso8601Duration(iso) {
+  if (!iso || typeof iso !== 'string') return null;
+  const m = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!m) return null;
+  const total =
+    parseInt(m[1] || '0', 10) * 3600 +
+    parseInt(m[2] || '0', 10) * 60 +
+    parseInt(m[3] || '0', 10);
+  return total > 0 ? total : null;
+}
+
 /** @param {number | null | undefined} totalSeconds */
 export function formatDuration(totalSeconds) {
   if (typeof totalSeconds !== 'number' || !Number.isFinite(totalSeconds) || totalSeconds <= 0) {

@@ -38,6 +38,8 @@ import {
   setFilterOpen,
   setFilterQuery,
   setDurationFilterOpen,
+  setSort,
+  setSortOpen,
   setFlagFormOpen,
   setProfileTab,
   setSearch,
@@ -49,7 +51,6 @@ import {
   subscribeStatus,
   toggleCreateCategory,
   toggleFilterCategory,
-  toggleSort,
   loadMoreListItems,
 } from './state.js';
 import {
@@ -63,6 +64,20 @@ import { formatDuration } from '../utils/duration.js';
 import { limits } from '../utils/validation.js';
 
 const FEEDBACK_URL = 'https://tally.so/r/xXlMNG';
+
+const SORT_OPTIONS = [
+  { value: 'recent', label: 'Most recent', icon: '🕒' },
+  { value: 'top', label: 'Most upvotes', icon: '👍' },
+  { value: 'comments', label: 'Most comments', icon: '💬' },
+];
+
+function sortOptionLabel(value) {
+  return SORT_OPTIONS.find((o) => o.value === value)?.label || 'Sort';
+}
+
+function sortOptionIcon(value) {
+  return SORT_OPTIONS.find((o) => o.value === value)?.icon || '⇅';
+}
 
 function myPublishPrice() {
   if (!state.connectedAddress) return null;
@@ -588,6 +603,28 @@ function renderDropdown({
   `;
 }
 
+function renderSortDropdown() {
+  const items = SORT_OPTIONS.map(
+    (opt) => `
+      <button
+        type="button"
+        class="dd-item${state.sort === opt.value ? ' dd-item--on' : ''}"
+        data-action="set-sort"
+        data-sort="${opt.value}"
+      >
+        <span class="dd-check" aria-hidden="true">${state.sort === opt.value ? '✓' : ''}</span>
+        <span class="dd-item-label">${opt.icon} ${escapeHtml(opt.label)}</span>
+      </button>
+    `,
+  ).join('');
+
+  return `
+    <div class="dropdown dropdown--sort" id="sort-dd">
+      <div class="dd-list">${items}</div>
+    </div>
+  `;
+}
+
 function categoryBadges(selected, removeAction, { showGenreTitles = false } = {}) {
   if (!selected.length) return '';
   return `
@@ -637,8 +674,10 @@ function videoPlayerHtml({ embed, variant = 'sm', lazy = false, shortId = null, 
   return `
     <div class="player ${variantClass}${lazyClass}"${lazyAttr}${shortIdAttr}>
       <div class="player-media">${mediaContent}</div>
-      <button type="button" class="player-fs-btn" data-action="player-fullscreen" aria-label="Fullscreen" title="Fullscreen">⛶</button>
-      ${copyBtn}
+      <div class="player-controls">
+        <button type="button" class="player-fs-btn" data-action="player-fullscreen" aria-label="Fullscreen" title="Fullscreen">⛶</button>
+        ${copyBtn}
+      </div>
     </div>
   `;
 }
@@ -801,6 +840,11 @@ function filterShorts() {
   }
   if (state.sort === 'top') {
     list.sort((a, b) => (b.upvotes || 0) - (a.upvotes || 0) || b.createdAt - a.createdAt);
+  } else if (state.sort === 'comments') {
+    list.sort(
+      (a, b) =>
+        (b.comments?.length || 0) - (a.comments?.length || 0) || b.createdAt - a.createdAt,
+    );
   } else {
     list.sort((a, b) => b.createdAt - a.createdAt);
   }
@@ -887,13 +931,15 @@ function renderDurationFilterDropdown(bounds) {
 
   return `
     <div class="dropdown duration-filter-dd" id="duration-filter-dd">
-      ${
-        active
-          ? `<div class="duration-filter-head"><button class="btn btn--ghost btn--sm" type="button" data-action="clear-duration-filter">Reset</button></div>`
-          : ''
-      }
       <div class="duration-range-wrap">
-        <div class="duration-filter-values" aria-live="polite">${escapeHtml(minLabel)} – ${escapeHtml(maxLabel)}</div>
+        <div class="duration-filter-row">
+          <div class="duration-filter-values" aria-live="polite">${escapeHtml(minLabel)} – ${escapeHtml(maxLabel)}</div>
+          ${
+            active
+              ? `<button class="btn btn--ghost btn--sm duration-filter-reset" type="button" data-action="clear-duration-filter">Reset</button>`
+              : ''
+          }
+        </div>
         <div class="duration-range-track">
           <div class="duration-range-rail" aria-hidden="true"></div>
           <div
@@ -1000,10 +1046,8 @@ function listView() {
   const shorts = filterShorts();
   const filterCount = state.filterCategories.length;
   const searchActive = Boolean(state.search.trim());
-  const sortIcon = '⇅';
-  const sortModeIcon = state.sort === 'recent' ? '🕒' : '👍';
-  const sortModeLabel = state.sort === 'recent' ? 'Recent' : 'Upvotes';
-  const sortNext = state.sort === 'recent' ? 'upvotes' : 'recent';
+  const sortLabel = sortOptionLabel(state.sort);
+  const sortIcon = sortOptionIcon(state.sort);
   const publishTitle = (() => {
     const info = myPublishPrice();
     if (!info) return `Publish a new short (${PRICE_PUBLISH_CRC} CRC)`;
@@ -1046,6 +1090,7 @@ function listView() {
   const durationDropdown = state.durationFilterOpen
     ? renderDurationFilterDropdown(durationBounds)
     : '';
+  const sortDropdown = state.sortOpen ? renderSortDropdown() : '';
 
   const searchBar = state.searchOpen
     ? `
@@ -1093,12 +1138,12 @@ function listView() {
         ${durationBounds ? '' : 'disabled'}
       >⏳<span class="toolbar-text">Duration</span>${durationFilterActive ? '<span class="toolbar-badge">•</span>' : ''}</button>
       <button
-        class="btn btn--icon btn--sort"
+        class="btn btn--icon btn--sort ${state.sortOpen ? 'btn--active' : ''}"
         type="button"
-        data-action="toggle-sort"
-        title="Toggle sort: switch to ${escapeHtml(sortNext)}"
-        aria-label="Sort: ${escapeHtml(sortModeLabel)}"
-      ><span class="sort-icon" aria-hidden="true">${sortIcon}</span><span class="sort-mode-icon" aria-hidden="true">${sortModeIcon}</span><span class="sort-label toolbar-text">${escapeHtml(sortModeLabel)}</span></button>
+        data-action="toggle-sort-open"
+        title="Sort feed"
+        aria-label="Sort: ${escapeHtml(sortLabel)}"
+      ><span class="sort-mode-icon" aria-hidden="true">${sortIcon}</span><span class="sort-label toolbar-text">${escapeHtml(sortLabel)}</span></button>
       <div class="toolbar-spacer"></div>
       <button
         class="btn btn--ghost btn--round"
@@ -1119,11 +1164,10 @@ function listView() {
     ${searchBar}
 
     <section class="filters">
-      ${filterCount ? `<div class="filters-bar"><button class="btn btn--ghost" type="button" data-action="clear-filter">Clear genres</button></div>` : ''}
-      ${durationFilterActive && durationBounds ? `<div class="filters-bar"><button class="btn btn--ghost" type="button" data-action="clear-duration-filter">Clear duration</button></div>` : ''}
       ${categoryBadges(state.filterCategories, 'toggle-filter-cat')}
       ${filterDropdown}
       ${durationDropdown}
+      ${sortDropdown}
     </section>
 
     ${feedBanner}
@@ -1565,8 +1609,14 @@ function bindEvents() {
   app.querySelectorAll('[data-action="clear-search"]').forEach((el) =>
     el.addEventListener('click', () => setSearch('')),
   );
-  app.querySelectorAll('[data-action="toggle-sort"]').forEach((el) =>
-    el.addEventListener('click', () => toggleSort()),
+  app.querySelectorAll('[data-action="toggle-sort-open"]').forEach((el) =>
+    el.addEventListener('click', () => setSortOpen(!state.sortOpen)),
+  );
+  app.querySelectorAll('[data-action="set-sort"]').forEach((el) =>
+    el.addEventListener('click', (e) => {
+      const sort = e.currentTarget.dataset.sort;
+      if (sort) setSort(sort);
+    }),
   );
 
   // Filter dropdown (list)
@@ -1832,7 +1882,7 @@ function handleOutsideClick(e) {
   if (!target || !target.closest) return;
   const closestDd = target.closest('.dropdown');
   const closestTrigger = target.closest(
-    '[data-action="toggle-filter-open"], [data-action="toggle-duration-filter-open"], [data-action="toggle-create-open"]',
+    '[data-action="toggle-filter-open"], [data-action="toggle-duration-filter-open"], [data-action="toggle-sort-open"], [data-action="toggle-create-open"]',
   );
 
   if (state.filterOpen) {
@@ -1847,6 +1897,13 @@ function handleOutsideClick(e) {
     const isDurationTrigger = closestTrigger?.dataset.action === 'toggle-duration-filter-open';
     if (!inDurationDd && !isDurationTrigger) {
       setDurationFilterOpen(false);
+    }
+  }
+  if (state.sortOpen) {
+    const inSortDd = closestDd?.id === 'sort-dd';
+    const isSortTrigger = closestTrigger?.dataset.action === 'toggle-sort-open';
+    if (!inSortDd && !isSortTrigger) {
+      setSortOpen(false);
     }
   }
   if (state.createCategoryOpen) {

@@ -631,11 +631,17 @@ a.profile-address.profile-link:hover {
   height: 100%;
 }
 
-.player-fs-btn {
+.player-controls {
   position: absolute;
   top: 0.5rem;
   left: 0.5rem;
   z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.player-fs-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -656,10 +662,6 @@ a.profile-address.profile-link:hover {
 }
 
 .player-copy-btn {
-  position: absolute;
-  bottom: 0.5rem;
-  left: 0.5rem;
-  z-index: 4;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -681,12 +683,17 @@ a.profile-address.profile-link:hover {
   color: #fff;
 }
 
-.player--expanded .player-copy-btn {
+.player--expanded .player-controls {
+  top: 0.75rem;
+  left: 0.75rem;
+  gap: 0.5rem;
+}
+
+.player--expanded .player-copy-btn,
+.player--expanded .player-fs-btn {
   width: 2.5rem;
   height: 2.5rem;
-  bottom: 0.75rem;
-  left: 0.75rem;
-  font-size: 1.05rem;
+  font-size: 1.15rem;
 }
 
 body.player-expanded-active {
@@ -711,14 +718,6 @@ body.player-expanded-active::before {
   margin: 0 !important;
   max-width: none;
   border-radius: 0;
-}
-
-.player--expanded .player-fs-btn {
-  width: 2.5rem;
-  height: 2.5rem;
-  top: 0.75rem;
-  left: 0.75rem;
-  font-size: 1.15rem;
 }
 
 .player-skeleton {
@@ -959,13 +958,6 @@ code {
   color: var(--primary);
 }
 
-.filters-bar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  align-items: center;
-}
-
 .field {
   display: flex;
   flex-direction: column;
@@ -1062,17 +1054,15 @@ code {
   font-weight: 500;
 }
 
+.dropdown--sort .dd-list {
+  max-height: none;
+}
+
 .duration-filter-dd {
   padding: 0.75rem 0.85rem;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-}
-
-.duration-filter-head {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
 }
 
 .duration-filter-empty {
@@ -1087,11 +1077,30 @@ code {
   gap: 0.5rem;
 }
 
+.duration-filter-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.duration-filter-row:has(.duration-filter-reset) {
+  justify-content: space-between;
+}
+
 .duration-filter-values {
-  text-align: center;
   font-size: 1.05rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+.duration-filter-row:has(.duration-filter-reset) .duration-filter-values {
+  flex: 1;
+  text-align: center;
+}
+
+.duration-filter-reset {
+  flex-shrink: 0;
 }
 
 .duration-range-track {

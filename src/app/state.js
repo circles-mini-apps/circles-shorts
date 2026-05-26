@@ -2,7 +2,7 @@ import { listShorts, reconcileAllModeration } from '../data/storage.js';
 import { ensureVideoDurations } from '../data/videoDuration.js';
 
 /** @typedef {'disconnected' | 'connecting' | 'connected' | 'error'} WalletPhase */
-/** @typedef {'recent' | 'top'} SortMode */
+/** @typedef {'recent' | 'top' | 'comments'} SortMode */
 /** @typedef {'list' | 'create' | 'detail' | 'profile'} View */
 /** @typedef {'published' | 'upvoted' | 'commented'} ProfileTab */
 
@@ -42,6 +42,8 @@ export const state = {
   durationFilterRange: null,
   /** @type {SortMode} */
   sort: 'recent',
+  /** @type {boolean} */
+  sortOpen: false,
 
   // Create form draft
   createDraft: {
@@ -221,6 +223,7 @@ export function setView(view, selectedShortId = null, options = {}) {
   setStatus('idle', '');
   state.filterOpen = false;
   state.durationFilterOpen = false;
+  state.sortOpen = false;
   state.createCategoryOpen = false;
   if (view === 'create') {
     state.createDraft = { title: '', url: '', categories: [] };
@@ -251,9 +254,12 @@ export function setSearchOpen(open) {
   notify();
 }
 
-export function toggleSort() {
-  state.sort = state.sort === 'recent' ? 'top' : 'recent';
-  resetListPagination();
+export function setSortOpen(open) {
+  state.sortOpen = Boolean(open);
+  if (state.sortOpen) {
+    state.filterOpen = false;
+    state.durationFilterOpen = false;
+  }
   notify();
 }
 
@@ -276,14 +282,20 @@ export function clearFilterCategories() {
 
 export function setFilterOpen(open) {
   state.filterOpen = Boolean(open);
-  if (state.filterOpen) state.durationFilterOpen = false;
+  if (state.filterOpen) {
+    state.durationFilterOpen = false;
+    state.sortOpen = false;
+  }
   if (!state.filterOpen) state.filterQuery = '';
   notify();
 }
 
 export function setDurationFilterOpen(open) {
   state.durationFilterOpen = Boolean(open);
-  if (state.durationFilterOpen) state.filterOpen = false;
+  if (state.durationFilterOpen) {
+    state.filterOpen = false;
+    state.sortOpen = false;
+  }
   notify();
 }
 
@@ -321,7 +333,10 @@ export function setFilterQuery(q) {
 }
 
 export function setSort(sort) {
+  if (!['recent', 'top', 'comments'].includes(sort)) return;
   state.sort = sort;
+  state.sortOpen = false;
+  resetListPagination();
   notify();
 }
 

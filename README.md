@@ -9,7 +9,7 @@ Embedded Circles miniapp where users publish short movies and pay CRC to interac
 | Publish a short | **1 CRC** (or reputation-based) | Platform organisation (`VITE_PLATFORM_ORG_ADDRESS`) |
 | Flag a short | **0.5 CRC** | Platform organisation (`VITE_PLATFORM_ORG_ADDRESS`) |
 | Upvote a short | **0.5 CRC** | The short's creator |
-| Comment on a short | **0.5 CRC** | The short's creator (also +1 upvote) |
+| Comment on a short | **0.5 CRC** | The short's creator |
 
 Platform fees go to a **Circles organisation avatar**. Set `VITE_PLATFORM_ORG_ADDRESS` in `.env` before `npm run build` / deploy. Default if unset: `0xFbAD3Ce0383D0aa3f4150EfE990acEa58d327B5f`.
 
@@ -42,7 +42,7 @@ Use a **dedicated Safe** for the treasury — not your personal Circles human wa
 
 Docs: [Creation of Organizations](https://docs.aboutcircles.com/circles-sdk/circles-avatars/organization-avatars/creation-of-organizations)
 
-A short requires a title, at least 1 genre, and an HTTPS video link (YouTube, Vimeo, TikTok, Twitch, Streamable, Dailymotion). The list view embeds the video preview, and supports search by title, multi-genre filter, and sorting by most recent or most upvotes.
+A short requires a title, at least 1 genre, and an HTTPS video link (YouTube, Vimeo, TikTok, Twitch, Streamable, Dailymotion). The list view embeds the video preview, and supports search by title, multi-genre filter, and sorting by most recent, most upvotes, or most comments.
 
 ## Develop (UI only)
 
@@ -69,6 +69,21 @@ VITE_HMR_HOST=your-subdomain.trycloudflare.com
 ```
 
 Restart `npm run dev`, then register the full `https://…trycloudflare.com` URL as the miniapp URL in the Circles host.
+
+**Tunnel troubleshooting**
+
+`failed to parse quick Tunnel ID: invalid UUID length: 0` means `cloudflared` got an empty or invalid response from `api.trycloudflare.com` (often intermittent on Cloudflare’s side, or blocked by VPN/ad blocker/corporate network).
+
+1. Start the dev server first: `npm run dev` (tunnel must point at a running port).
+2. In a second terminal: `npm run tunnel` (or `cloudflared tunnel --url http://127.0.0.1:5173`).
+3. Update cloudflared: `brew upgrade cloudflared`.
+4. Retry in a few minutes, or disable VPN/ad blockers for `trycloudflare.com`.
+5. **Skip the tunnel** for host testing: use the deployed app at `https://circles-shorts.pages.dev` instead of localhost.
+
+**Alternatives if quick tunnels keep failing**
+
+- **ngrok**: `ngrok http 5173` → set `VITE_HMR_HOST` to the ngrok hostname (no `https://`).
+- **Named Cloudflare tunnel** (stable, needs free Cloudflare account): [Cloudflare Tunnel setup](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/create-local-tunnel/).
 
 ## Demo without funds
 

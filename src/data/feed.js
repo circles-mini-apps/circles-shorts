@@ -18,6 +18,7 @@ import {
   upsertRemoteComment,
   upsertRemoteShort,
   upsertRemoteUpvote,
+  resetAllUpvoteCounts,
   upsertRemoteFlag,
   upsertRemoteModVote,
   upsertRemoteRuling,
@@ -134,6 +135,7 @@ export async function refreshFeedFromRemote() {
   }
 
   let upvotesAdded = 0;
+  resetAllUpvoteCounts();
   for (const pin of upvotePins) {
     const shortCid = pin.keyvalues?.shortCid;
     const voter = pin.keyvalues?.voter;

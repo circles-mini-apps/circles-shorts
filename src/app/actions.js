@@ -312,7 +312,7 @@ export async function comment(shortId, text) {
 
     commentShort(shortId, { by: author, text: cleanText, cid });
     refreshShorts();
-    setStatus('success', 'Comment posted (+1 upvote).');
+    setStatus('success', 'Comment posted.');
   } catch (err) {
     setStatus('error', normalizeError(err));
     throw err;
