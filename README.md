@@ -6,9 +6,41 @@ Embedded Circles miniapp where users publish short movies and pay CRC to interac
 
 | Action | Cost | Recipient |
 |--------|------|-----------|
-| Publish a short | **1 CRC** | Platform creator `0xFb0081655265F7cD45A9cCd598F5A2Ba29567F21` |
+| Publish a short | **1 CRC** (or reputation-based) | Platform organisation (`VITE_PLATFORM_ORG_ADDRESS`) |
+| Flag a short | **0.5 CRC** | Platform organisation (`VITE_PLATFORM_ORG_ADDRESS`) |
 | Upvote a short | **0.5 CRC** | The short's creator |
 | Comment on a short | **0.5 CRC** | The short's creator (also +1 upvote) |
+
+Platform fees go to a **Circles organisation avatar**. Set `VITE_PLATFORM_ORG_ADDRESS` in `.env` before `npm run build` / deploy. Default if unset: `0xFbAD3Ce0383D0aa3f4150EfE990acEa58d327B5f`.
+
+### Register the platform organisation
+
+Use a **dedicated Safe** for the treasury — not your personal Circles human wallet (one address = one avatar type).
+
+1. **Create a Safe** at [app.safe.global](https://app.safe.global) on Gnosis Chain. Fund it with a little **xDAI** (~0.01) for gas.
+2. **Export one owner private key** for that Safe (Settings → owner key export, or use a fresh EOA you added as sole owner when creating the Safe).
+3. Add to `.env` (never commit real keys):
+   ```
+   ORG_REGISTER_PRIVATE_KEY=0x...
+   ORG_SAFE_ADDRESS=0x...          # the Safe address
+   ORG_NAME=Circles Shorts
+   ORG_DESCRIPTION=Platform treasury for Circles Shorts
+   ```
+4. Register on Circles:
+   ```bash
+   npm run register:org
+   ```
+   This runs the same flow as the [Circles SDK docs](https://docs.aboutcircles.com/circles-sdk/circles-avatars/organization-avatars/creation-of-organizations): `Sdk` + `register.asOrganization`, with a Safe runner for signing.
+5. Copy the printed address into `.env`:
+   ```
+   VITE_PLATFORM_ORG_ADDRESS=0x...
+   ```
+6. Rebuild and deploy:
+   ```bash
+   npm run deploy
+   ```
+
+Docs: [Creation of Organizations](https://docs.aboutcircles.com/circles-sdk/circles-avatars/organization-avatars/creation-of-organizations)
 
 A short requires a title, at least 1 genre, and an HTTPS video link (YouTube, Vimeo, TikTok, Twitch, Streamable, Dailymotion). The list view embeds the video preview, and supports search by title, multi-genre filter, and sorting by most recent or most upvotes.
 
@@ -104,6 +136,7 @@ scripts/
 | Variable | Purpose |
 |----------|---------|
 | `VITE_PINATA_JWT` | Pinata API JWT (scope: `pinJSONToIPFS`, `pinFileToIPFS`, `pinList`). Required for cross-user feed + deploy. |
+| `VITE_PLATFORM_ORG_ADDRESS` | Circles **organisation** avatar that receives publish + flag fees. Inlined at build time. |
 | `VITE_IPFS_GATEWAY` | Optional dedicated Pinata gateway URL (faster reads). |
 | `VITE_HMR_HOST` | Tunnel hostname for HMR in the Circles host. |
 | `VITE_CIRCLES_RPC_URL` | Public HTTPS Circles RPC (fallback to the one host provides via `onAppData`, else `https://rpc.aboutcircles.com/`). |

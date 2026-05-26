@@ -1,5 +1,5 @@
 /** Minimum unique votes before a flag can be ruled. */
-export const MIN_MODERATION_VOTES = 20;
+export const MIN_MODERATION_VOTES = 5;
 
 /** Days after a flag before ruling is allowed. */
 export const MODERATION_DAYS = 7;
@@ -81,7 +81,7 @@ export function moderationSnapshot(short) {
   const waitingPeriodComplete = flagAge >= MODERATION_PERIOD_MS;
   const msUntilPeriodEnd = Math.max(0, MODERATION_PERIOD_MS - flagAge);
   const votesNeeded = Math.max(0, MIN_MODERATION_VOTES - tally.total);
-  // Ruling only after 7 days AND 20 votes; if day 7 passes with fewer votes, stay open until 20.
+  // Ruling only after 7 days AND MIN_MODERATION_VOTES; if day 7 passes with fewer votes, stay open until threshold.
   const canRule = waitingPeriodComplete && votesNeeded === 0;
 
   let status = /** @type {ModerationStatus} */ ('voting');

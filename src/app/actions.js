@@ -10,8 +10,11 @@ import {
   upvoteShort,
 } from '../data/storage.js';
 import { crcToAtto, isDemoMode, sendCrc } from '../chain/circlesTransfer.js';
+import { PLATFORM_ORG } from '../chain/platformOrg.js';
 import { isPinningEnabled, pinJson } from '../data/ipfs.js';
 import { refreshFeedFromRemote } from '../data/feed.js';
+import { resolveVideoDuration } from '../data/videoDuration.js';
+import { MIN_MODERATION_VOTES } from '../data/moderation.js';
 import {
   computePublishPrice,
   formatPublishPriceLabel,
@@ -37,8 +40,7 @@ import {
   state,
 } from './state.js';
 
-/** Platform creator: receives 1 CRC when a short is published. */
-export const PLATFORM_CREATOR = getAddress('0xFb0081655265F7cD45A9cCd598F5A2Ba29567F21');
+export { PLATFORM_ORG, PLATFORM_ORG as PLATFORM_CREATOR } from '../chain/platformOrg.js';
 
 export const PRICE_PUBLISH_CRC = '1';
 export const PRICE_INTERACT_CRC = '0.5';
@@ -125,6 +127,7 @@ async function payCrc(toAddr, amountCrc, label, { cid } = {}) {
   return sendCrc(from, toAddr, atto, { cid });
 }
 
+/** Pin after payment succeeds — never pin discoverable content before payCrc resolves. */
 async function pinIfEnabled(payload, { name, keyvalues = {} }) {
   if (!isPinningEnabled()) return null;
   try {
@@ -185,6 +188,13 @@ export async function publishShort({ title, url, categories }) {
     const cleanUrl = validateVideoUrl(url);
     const cleanCategories = validateCategories(categories);
 
+    let durationSeconds = null;
+    try {
+      durationSeconds = await resolveVideoDuration(cleanUrl);
+    } catch {
+      /* optional metadata */
+    }
+
     const payload = {
       kind: 'circles-shorts:short',
       v: 1,
@@ -193,25 +203,32 @@ export async function publishShort({ title, url, categories }) {
       categories: cleanCategories,
       creator: from,
       createdAt: Date.now(),
+      ...(durationSeconds ? { durationSeconds } : {}),
     };
-    const cid = await pinIfEnabled(payload, {
+    const pinOpts = {
       name: `short:${cleanTitle}`,
       keyvalues: { kind: 'short', creator: from.toLowerCase() },
-    });
+    };
 
+    let cid = null;
     if (isFree) {
       if (isDemoMode()) {
         setStatus('pending', 'Demo mode: publishing for free…');
       }
+      cid = await pinIfEnabled(payload, pinOpts);
     } else {
-      await payCrc(PLATFORM_CREATOR, priceCrc, 'to publish', { cid });
+      // Pay before pinning — otherwise a cancelled payment still leaves a discoverable IPFS short.
+      await payCrc(PLATFORM_ORG, priceCrc, 'to publish', { cid: null });
+      cid = await pinIfEnabled(payload, pinOpts);
     }
+
     const short = addShort({
       title: cleanTitle,
       url: cleanUrl,
       categories: cleanCategories,
       creator: from,
       cid,
+      durationSeconds,
     });
     refreshShorts();
     const paidLabel = isFree ? 'for free' : `(${formatPublishPriceLabel(getPublishPriceFor(from))})`;
@@ -324,7 +341,7 @@ export async function flagShort(shortId, { category, explanation }) {
     };
 
     // Pay before pinning — otherwise a cancelled payment still leaves a discoverable IPFS flag.
-    await payCrc(PLATFORM_CREATOR, PRICE_FLAG_CRC, 'to flag', { cid: short.cid });
+    await payCrc(PLATFORM_ORG, PRICE_FLAG_CRC, 'to flag', { cid: short.cid });
     const flagCid = await pinIfEnabled(flagPayload, {
       name: `flag:${short.cid}`,
       keyvalues: { kind: 'flag', shortCid: short.cid, flagger: flagger.toLowerCase() },
@@ -338,7 +355,7 @@ export async function flagShort(shortId, { category, explanation }) {
       cid: flagCid || `local-${Date.now()}`,
     });
     refreshShorts();
-    setStatus('success', 'Flag submitted. Voting opens for at least 7 days and until 20 votes are cast.');
+    setStatus('success', `Flag submitted. Voting opens for at least 7 days and until ${MIN_MODERATION_VOTES} votes are cast.`);
     return getShort(shortId);
   } catch (err) {
     setStatus('error', normalizeError(err));

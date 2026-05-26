@@ -64,7 +64,7 @@ export function getShort(id) {
   return read().shorts.find((s) => s.id === id) || null;
 }
 
-export function addShort({ title, url, categories, creator, cid = null }) {
+export function addShort({ title, url, categories, creator, cid = null, durationSeconds = null }) {
   const state = read();
   const short = {
     id: uid(),
@@ -77,6 +77,7 @@ export function addShort({ title, url, categories, creator, cid = null }) {
     comments: [],
     voters: [],
     cid,
+    ...(typeof durationSeconds === 'number' && durationSeconds > 0 ? { durationSeconds } : {}),
   };
   state.shorts.push(short);
   write(state);
@@ -207,7 +208,15 @@ export function addModerationVote(shortId, { voter, verdict, flagCid, cid }) {
   return short;
 }
 
-export function upsertRemoteShort({ cid, title, url, categories, creator, createdAt }) {
+export function upsertRemoteShort({
+  cid,
+  title,
+  url,
+  categories,
+  creator,
+  createdAt,
+  durationSeconds,
+}) {
   if (!cid) return null;
   const state = read();
   let short = findShort(state, { cid });
@@ -217,6 +226,9 @@ export function upsertRemoteShort({ cid, title, url, categories, creator, create
     short.categories = Array.isArray(categories) ? categories : short.categories;
     short.creator = creator ?? short.creator;
     short.createdAt = createdAt ?? short.createdAt;
+    if (typeof durationSeconds === 'number' && durationSeconds > 0) {
+      short.durationSeconds = durationSeconds;
+    }
   } else {
     short = {
       id: cid,
@@ -229,6 +241,7 @@ export function upsertRemoteShort({ cid, title, url, categories, creator, create
       comments: [],
       voters: [],
       cid,
+      ...(typeof durationSeconds === 'number' && durationSeconds > 0 ? { durationSeconds } : {}),
     };
     state.shorts.push(short);
   }

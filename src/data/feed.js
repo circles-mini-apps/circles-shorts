@@ -98,6 +98,7 @@ export async function refreshFeedFromRemote() {
       categories: Array.isArray(data.categories) ? data.categories : [],
       creator: data.creator,
       createdAt: data.createdAt,
+      durationSeconds: data.durationSeconds,
     });
     shortsAdded++;
   }

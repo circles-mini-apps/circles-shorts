@@ -1,4 +1,5 @@
 import { listShorts, reconcileAllModeration } from '../data/storage.js';
+import { ensureVideoDurations } from '../data/videoDuration.js';
 
 /** @typedef {'disconnected' | 'connecting' | 'connected' | 'error'} WalletPhase */
 /** @typedef {'recent' | 'top'} SortMode */
@@ -33,6 +34,12 @@ export const state = {
   filterOpen: false,
   /** @type {string} */
   filterQuery: '',
+  /** Duration filter panel open (list view). */
+  /** @type {boolean} */
+  durationFilterOpen: false,
+  /** Selected duration range in seconds; null = no duration filter. */
+  /** @type {{ min: number; max: number } | null} */
+  durationFilterRange: null,
   /** @type {SortMode} */
   sort: 'recent',
 
@@ -76,6 +83,10 @@ export const state = {
   listScrollY: null,
   /** @type {{ scrollY: number, visibleCount: number } | null} */
   pendingListRestore: null,
+
+  /** Runtime cache keyed by video URL (seconds). */
+  /** @type {Record<string, number | null>} */
+  videoDurations: {},
 };
 
 export const LIST_PAGE_SIZE = 10;
@@ -101,10 +112,21 @@ function notifyStatus() {
   for (const fn of statusListeners) fn();
 }
 
+export function setVideoDuration(url, seconds) {
+  if (!url) return;
+  const value = typeof seconds === 'number' && seconds > 0 ? seconds : null;
+  if (state.videoDurations[url] === value) return;
+  state.videoDurations[url] = value;
+  notify();
+}
+
 export function refreshShorts() {
   reconcileAllModeration();
   state.shorts = listShorts();
   notify();
+  void ensureVideoDurations(state.shorts, (url, seconds) => {
+    setVideoDuration(url, seconds);
+  });
 }
 
 export function setFeedLoading(loading) {
@@ -198,6 +220,7 @@ export function setView(view, selectedShortId = null, options = {}) {
   state.flagFormOpen = view === 'detail' && Boolean(options.openFlagForm);
   setStatus('idle', '');
   state.filterOpen = false;
+  state.durationFilterOpen = false;
   state.createCategoryOpen = false;
   if (view === 'create') {
     state.createDraft = { title: '', url: '', categories: [] };
@@ -253,8 +276,43 @@ export function clearFilterCategories() {
 
 export function setFilterOpen(open) {
   state.filterOpen = Boolean(open);
+  if (state.filterOpen) state.durationFilterOpen = false;
   if (!state.filterOpen) state.filterQuery = '';
   notify();
+}
+
+export function setDurationFilterOpen(open) {
+  state.durationFilterOpen = Boolean(open);
+  if (state.durationFilterOpen) state.filterOpen = false;
+  notify();
+}
+
+/** @param {number} min @param {number} max */
+export function setDurationFilterRange(min, max) {
+  let lo = Math.round(min);
+  let hi = Math.round(max);
+  if (lo > hi) [lo, hi] = [hi, lo];
+  state.durationFilterRange = { min: lo, max: hi };
+  resetListPagination();
+  notify();
+}
+
+export function clearDurationFilter() {
+  if (!state.durationFilterRange) return;
+  state.durationFilterRange = null;
+  resetListPagination();
+  notify();
+}
+
+export function applyDurationFilterValues(min, max, bounds) {
+  if (!bounds) return;
+  const lo = Math.max(bounds.min, Math.min(min, bounds.max));
+  const hi = Math.min(bounds.max, Math.max(max, bounds.min));
+  if (lo <= bounds.min && hi >= bounds.max) {
+    clearDurationFilter();
+  } else {
+    setDurationFilterRange(lo, hi);
+  }
 }
 
 export function setFilterQuery(q) {

@@ -1,4 +1,3 @@
-import { isMiniappMode } from '../host/bridge.js';
 import {
   PRICE_FLAG_CRC,
   PRICE_INTERACT_CRC,
@@ -12,7 +11,7 @@ import {
 } from './actions.js';
 import { formatPublishPriceLabel, PRAISE_KARMA_TIP, STRIKE_KARMA_TIP, publishPriceHint } from '../data/reputation.js';
 import { isDemoMode } from '../chain/circlesTransfer.js';
-import { allKnownCategories, existingCategories } from '../data/categories.js';
+import { allKnownCategories, genreDescription, submittedGenresWithCounts } from '../data/categories.js';
 import { FLAG_CATEGORIES, flagCategoryLabel } from '../data/flagReasons.js';
 import {
   MIN_MODERATION_VOTES,
@@ -26,12 +25,19 @@ import {
 import { ensureProfilesLoaded, profileFor, profileNameFor } from '../data/profiles.js';
 import { getShort } from '../data/storage.js';
 import {
+  durationBoundsForShorts,
+  getShortDurationSeconds,
+} from '../data/videoDuration.js';
+import {
   clearFilterCategories,
+  clearDurationFilter,
+  applyDurationFilterValues,
   setCreateCategoryOpen,
   setCreateCategoryQuery,
   setCreateDraft,
   setFilterOpen,
   setFilterQuery,
+  setDurationFilterOpen,
   setFlagFormOpen,
   setProfileTab,
   setSearch,
@@ -53,6 +59,7 @@ import {
   shortAddress,
   timeAgo,
 } from '../utils/format.js';
+import { formatDuration } from '../utils/duration.js';
 import { limits } from '../utils/validation.js';
 
 const FEEDBACK_URL = 'https://tally.so/r/xXlMNG';
@@ -115,6 +122,14 @@ function updateFlagCategoryDesc(form) {
   if (!select || !desc) return;
   const cat = FLAG_CATEGORIES.find((c) => c.value === select.value);
   desc.textContent = cat?.description || 'Select a reason to see what it covers.';
+}
+
+function updateGenreDesc(genre) {
+  const desc = document.querySelector('[data-genre-desc]');
+  if (!desc) return;
+  const text = genre ? genreDescription(genre) : null;
+  desc.textContent =
+    text || (genre ? 'No description for this genre.' : 'Hover or tap a genre to see what it covers.');
 }
 
 function renderModerationPanel(s) {
@@ -452,8 +467,13 @@ function setupLazyObservers() {
   }
 }
 
+function listShortCount() {
+  return state.shorts.filter((s) => s.moderation?.status !== 'violated').length;
+}
+
 function header() {
-  const mode = isMiniappMode() ? 'Host mode' : 'Standalone mode';
+  const n = listShortCount();
+  const countLabel = `${n} short${n === 1 ? '' : 's'}`;
   const demo = isDemoMode() ? '<span class="badge">demo · no CRC</span>' : '';
 
   let walletBtn;
@@ -484,7 +504,7 @@ function header() {
     <header class="topbar">
       <div class="brand">
         <button class="brand-btn" data-action="go-list" type="button">🎬 Circles Shorts</button>
-        <span class="brand-meta muted">${escapeHtml(mode)}</span>
+        <span class="brand-meta muted">${escapeHtml(countLabel)}</span>
         ${demo}
       </div>
       <div class="topbar-right">${walletBtn}</div>
@@ -492,22 +512,40 @@ function header() {
   `;
 }
 
-function renderDropdown({ id, options, selected, query, queryKey, toggleAction, allowAdd }) {
+function renderDropdown({
+  id,
+  options,
+  selected,
+  query,
+  queryKey,
+  toggleAction,
+  allowAdd,
+  describeGenres = false,
+  optionCounts = null,
+  emptyLabel = 'No genres match',
+}) {
   const q = query.trim().toLowerCase();
   const selectedLower = selected.map((s) => s.toLowerCase());
   const filtered = q ? options.filter((c) => c.toLowerCase().includes(q)) : options;
   const items = filtered
     .map((c) => {
       const on = selectedLower.includes(c.toLowerCase());
+      const desc = describeGenres ? genreDescription(c) : null;
+      const titleAttr = desc ? ` title="${escapeHtml(desc)}"` : '';
+      const genreAttr = describeGenres ? ` data-genre="${escapeHtml(c)}"` : '';
+      const count = optionCounts?.[c];
+      const countHtml =
+        count != null ? `<span class="dd-item-count muted">${count}</span>` : '';
       return `
         <button
           type="button"
           class="dd-item${on ? ' dd-item--on' : ''}"
           data-action="${toggleAction}"
-          data-cat="${escapeHtml(c)}"
+          data-cat="${escapeHtml(c)}"${genreAttr}${titleAttr}
         >
           <span class="dd-check" aria-hidden="true">${on ? '✓' : ''}</span>
-          <span>${escapeHtml(c)}</span>
+          <span class="dd-item-label">${escapeHtml(c)}</span>
+          ${countHtml}
         </button>
       `;
     })
@@ -525,7 +563,7 @@ function renderDropdown({ id, options, selected, query, queryKey, toggleAction, 
 
   const emptyBlock =
     !items && !addBlock
-      ? '<div class="dd-empty muted">No genres match</div>'
+      ? `<div class="dd-empty muted">${escapeHtml(emptyLabel)}</div>`
       : '';
 
   return `
@@ -550,21 +588,23 @@ function renderDropdown({ id, options, selected, query, queryKey, toggleAction, 
   `;
 }
 
-function categoryBadges(selected, removeAction) {
+function categoryBadges(selected, removeAction, { showGenreTitles = false } = {}) {
   if (!selected.length) return '';
   return `
     <div class="chips chips--sm">
       ${selected
-        .map(
-          (c) => `
+        .map((c) => {
+          const desc = showGenreTitles ? genreDescription(c) : null;
+          const titleAttr = desc ? ` title="${escapeHtml(desc)}"` : '';
+          return `
             <button
               type="button"
               class="chip chip--on chip--removable"
               data-action="${removeAction}"
-              data-cat="${escapeHtml(c)}"
+              data-cat="${escapeHtml(c)}"${titleAttr}
             >${escapeHtml(c)} ✕</button>
-          `,
-        )
+          `;
+        })
         .join('')}
     </div>
   `;
@@ -582,7 +622,7 @@ function iframeHtml(src) {
   return `<iframe src="${escapeHtml(src)}" allow="${IFRAME_ALLOW}" allowfullscreen loading="lazy" title="Video player"></iframe>`;
 }
 
-function videoPlayerHtml({ embed, variant = 'sm', lazy = false, shortId = null }) {
+function videoPlayerHtml({ embed, variant = 'sm', lazy = false, shortId = null, videoUrl = null }) {
   const variantClass = variant === 'bleed' ? 'player--bleed' : 'player--sm';
   const lazyClass = lazy ? ' lazy-player' : '';
   const lazyAttr = lazy ? ` data-embed="${escapeHtml(embed)}"` : '';
@@ -590,13 +630,21 @@ function videoPlayerHtml({ embed, variant = 'sm', lazy = false, shortId = null }
   const mediaContent = lazy
     ? '<div class="player-skeleton" aria-hidden="true"></div>'
     : iframeHtml(embed);
+  const copyBtn = videoUrl
+    ? `<a class="video-link player-copy-btn" href="${escapeHtml(videoUrl)}" title="Copy video link" aria-label="Copy video link">🔗</a>`
+    : '';
 
   return `
     <div class="player ${variantClass}${lazyClass}"${lazyAttr}${shortIdAttr}>
       <div class="player-media">${mediaContent}</div>
       <button type="button" class="player-fs-btn" data-action="player-fullscreen" aria-label="Fullscreen" title="Fullscreen">⛶</button>
+      ${copyBtn}
     </div>
   `;
+}
+
+function videoLinkHtml(url, { className = 'video-link', label = 'Copy video link' } = {}) {
+  return `<a class="${className}" href="${escapeHtml(url)}">${escapeHtml(label)}</a>`;
 }
 
 let expandedPlayer = null;
@@ -743,6 +791,14 @@ function filterShorts() {
       return cats.every((c) => shortCats.includes(c));
     });
   }
+  const durationRange = state.durationFilterRange;
+  if (durationRange) {
+    list = list.filter((s) => {
+      const d = getShortDurationSeconds(s, state.videoDurations);
+      if (d == null) return false;
+      return d >= durationRange.min && d <= durationRange.max;
+    });
+  }
   if (state.sort === 'top') {
     list.sort((a, b) => (b.upvotes || 0) - (a.upvotes || 0) || b.createdAt - a.createdAt);
   } else {
@@ -782,14 +838,111 @@ function renderCardFlagBtn(s, { underReview, isOwn, violated, onDetail = false }
   `;
 }
 
+function shortDurationSeconds(s) {
+  return getShortDurationSeconds(s, state.videoDurations);
+}
+
+function shortsForDurationBounds() {
+  return state.shorts.filter((s) => s.moderation?.status !== 'violated');
+}
+
+function durationFilterBounds() {
+  return durationBoundsForShorts(shortsForDurationBounds(), state.videoDurations);
+}
+
+function isDurationFilterActive(bounds) {
+  if (!bounds || !state.durationFilterRange) return false;
+  return (
+    state.durationFilterRange.min > bounds.min || state.durationFilterRange.max < bounds.max
+  );
+}
+
+function effectiveDurationSliderRange(bounds) {
+  if (!bounds) return null;
+  if (!state.durationFilterRange) {
+    return { min: bounds.min, max: bounds.max };
+  }
+  return {
+    min: Math.max(bounds.min, Math.min(state.durationFilterRange.min, bounds.max)),
+    max: Math.min(bounds.max, Math.max(state.durationFilterRange.max, bounds.min)),
+  };
+}
+
+function renderDurationFilterDropdown(bounds) {
+  if (!bounds) {
+    return `
+      <div class="dropdown duration-filter-dd" id="duration-filter-dd">
+        <p class="duration-filter-empty muted">No duration data yet. Lengths appear after videos load.</p>
+      </div>
+    `;
+  }
+
+  const range = effectiveDurationSliderRange(bounds);
+  const minLabel = formatDuration(range.min) || '0:00';
+  const maxLabel = formatDuration(range.max) || '0:00';
+  const active = isDurationFilterActive(bounds);
+  const span = bounds.max - bounds.min || 1;
+  const fillLeft = ((range.min - bounds.min) / span) * 100;
+  const fillWidth = ((range.max - range.min) / span) * 100;
+
+  return `
+    <div class="dropdown duration-filter-dd" id="duration-filter-dd">
+      ${
+        active
+          ? `<div class="duration-filter-head"><button class="btn btn--ghost btn--sm" type="button" data-action="clear-duration-filter">Reset</button></div>`
+          : ''
+      }
+      <div class="duration-range-wrap">
+        <div class="duration-filter-values" aria-live="polite">${escapeHtml(minLabel)} – ${escapeHtml(maxLabel)}</div>
+        <div class="duration-range-track">
+          <div class="duration-range-rail" aria-hidden="true"></div>
+          <div
+            class="duration-range-fill"
+            data-duration-range-fill
+            style="left: ${fillLeft}%; width: ${fillWidth}%;"
+          ></div>
+          <input
+            type="range"
+            class="duration-range-input duration-range-input--min"
+            min="${bounds.min}"
+            max="${bounds.max}"
+            value="${range.min}"
+            step="1"
+            data-action="duration-filter-min"
+            aria-label="Minimum duration"
+          />
+          <input
+            type="range"
+            class="duration-range-input duration-range-input--max"
+            min="${bounds.min}"
+            max="${bounds.max}"
+            value="${range.max}"
+            step="1"
+            data-action="duration-filter-max"
+            aria-label="Maximum duration"
+          />
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function shortTitleWithDurationHtml(s) {
+  const label = formatDuration(shortDurationSeconds(s));
+  const durationHtml = label
+    ? `<span class="short-duration muted"> (${escapeHtml(label)})</span>`
+    : '';
+  return `${escapeHtml(s.title)}${durationHtml}`;
+}
+
 function shortCard(s) {
   const cats = (s.categories || [])
     .map((c) => `<span class="chip chip--sm">${escapeHtml(c)}</span>`)
     .join('');
   const embed = videoEmbedUrl(s.url);
   const player = embed
-    ? videoPlayerHtml({ embed, variant: 'sm', lazy: true, shortId: s.id })
-    : `<a class="player-link" href="${escapeHtml(s.url)}" target="_blank" rel="noopener noreferrer">Open video ↗</a>`;
+    ? videoPlayerHtml({ embed, variant: 'sm', lazy: true, shortId: s.id, videoUrl: s.url })
+    : videoLinkHtml(s.url, { className: 'video-link player-link' });
 
   const name = profileNameFor(s.creator);
   const byLabel = name || shortAddress(s.creator);
@@ -816,7 +969,7 @@ function shortCard(s) {
       </div>
       <div class="short-body">
         <div class="short-title-row">
-          <h3 class="short-title clickable" data-action="go-detail" data-id="${escapeHtml(s.id)}">${escapeHtml(s.title)}</h3>
+          <h3 class="short-title clickable" data-action="go-detail" data-id="${escapeHtml(s.id)}">${shortTitleWithDurationHtml(s)}</h3>
           ${removedBadge}
         </div>
         <div class="short-sub muted">by ${byHtml} · ${escapeHtml(timeAgo(s.createdAt))}</div>
@@ -872,17 +1025,26 @@ function listView() {
     ? `<div class="banner banner--error" role="status">Couldn't sync remote feed: ${escapeHtml(feedError)}</div>`
     : '';
 
-  const existing = existingCategories();
+  const genreRows = submittedGenresWithCounts(state.shorts);
+  const filterGenres = genreRows.map((r) => r.genre);
+  const genreCounts = Object.fromEntries(genreRows.map((r) => [r.genre, r.count]));
+  const durationBounds = durationFilterBounds();
+  const durationFilterActive = isDurationFilterActive(durationBounds);
   const filterDropdown = state.filterOpen
     ? renderDropdown({
         id: 'filter-dd',
-        options: existing,
+        options: filterGenres,
         selected: state.filterCategories,
         query: state.filterQuery,
         queryKey: 'filter-query',
         toggleAction: 'toggle-filter-cat',
         allowAdd: false,
+        optionCounts: genreCounts,
+        emptyLabel: filterGenres.length ? 'No genres match' : 'No genres published yet',
       })
+    : '';
+  const durationDropdown = state.durationFilterOpen
+    ? renderDurationFilterDropdown(durationBounds)
     : '';
 
   const searchBar = state.searchOpen
@@ -923,6 +1085,14 @@ function listView() {
         aria-label="Genre"
       >🏷<span class="toolbar-text">Genre</span>${filterCount ? `<span class="toolbar-badge">${filterCount}</span>` : ''}</button>
       <button
+        class="btn btn--icon ${state.durationFilterOpen || durationFilterActive ? 'btn--active' : ''}"
+        type="button"
+        data-action="toggle-duration-filter-open"
+        title="${durationBounds ? 'Filter by duration' : 'Duration filter (waiting for video lengths)'}"
+        aria-label="Duration"
+        ${durationBounds ? '' : 'disabled'}
+      >⏳<span class="toolbar-text">Duration</span>${durationFilterActive ? '<span class="toolbar-badge">•</span>' : ''}</button>
+      <button
         class="btn btn--icon btn--sort"
         type="button"
         data-action="toggle-sort"
@@ -950,8 +1120,10 @@ function listView() {
 
     <section class="filters">
       ${filterCount ? `<div class="filters-bar"><button class="btn btn--ghost" type="button" data-action="clear-filter">Clear genres</button></div>` : ''}
+      ${durationFilterActive && durationBounds ? `<div class="filters-bar"><button class="btn btn--ghost" type="button" data-action="clear-duration-filter">Clear duration</button></div>` : ''}
       ${categoryBadges(state.filterCategories, 'toggle-filter-cat')}
       ${filterDropdown}
+      ${durationDropdown}
     </section>
 
     ${feedBanner}
@@ -978,6 +1150,7 @@ function createView() {
         queryKey: 'create-cat-query',
         toggleAction: 'toggle-create-cat',
         allowAdd: false,
+        describeGenres: true,
       })
     : '';
 
@@ -1028,8 +1201,9 @@ function createView() {
             : 'Select genres…'}
           <span aria-hidden="true">▾</span>
         </button>
-        ${categoryBadges(d.categories, 'toggle-create-cat')}
+        ${categoryBadges(d.categories, 'toggle-create-cat', { showGenreTitles: true })}
         ${createDropdown}
+        <p class="small muted genre-category-desc" data-genre-desc>Hover or tap a genre to see what it covers.</p>
       </div>
 
       <div class="form-actions">
@@ -1187,8 +1361,8 @@ function detailView() {
   }
   const embed = videoEmbedUrl(s.url);
   const player = embed
-    ? videoPlayerHtml({ embed, variant: 'bleed', lazy: false, shortId: s.id })
-    : `<p><a href="${escapeHtml(s.url)}" target="_blank" rel="noopener noreferrer">Open video ↗</a></p>`;
+    ? videoPlayerHtml({ embed, variant: 'bleed', lazy: false, shortId: s.id, videoUrl: s.url })
+    : `<p>${videoLinkHtml(s.url, { className: 'video-link player-link' })}</p>`;
   const cats = (s.categories || [])
     .map((c) => `<span class="chip chip--sm">${escapeHtml(c)}</span>`)
     .join('');
@@ -1223,7 +1397,7 @@ function detailView() {
   return `
     <button class="btn btn--ghost back" type="button" data-action="go-list">← Back</button>
     <article class="card detail${violated ? ' detail--violated' : ''}">
-      <h2>${escapeHtml(s.title)}</h2>
+      <h2>${shortTitleWithDurationHtml(s)}</h2>
       <div class="short-sub muted">by ${creatorHtml} · ${escapeHtml(timeAgo(s.createdAt))}</div>
       <div class="chips chips--sm">${cats}</div>
       ${violated ? '<p class="moderation-removed-banner">This short was removed after community moderation.</p>' : `
@@ -1399,6 +1573,78 @@ function bindEvents() {
   app.querySelectorAll('[data-action="toggle-filter-open"]').forEach((el) =>
     el.addEventListener('click', () => setFilterOpen(!state.filterOpen)),
   );
+  app.querySelectorAll('[data-action="toggle-duration-filter-open"]').forEach((el) =>
+    el.addEventListener('click', () => setDurationFilterOpen(!state.durationFilterOpen)),
+  );
+  app.querySelectorAll('[data-action="clear-duration-filter"]').forEach((el) =>
+    el.addEventListener('click', () => clearDurationFilter()),
+  );
+  const durationMin = app.querySelector('[data-action="duration-filter-min"]');
+  const durationMax = app.querySelector('[data-action="duration-filter-max"]');
+  if (durationMin && durationMax) {
+    const bounds = durationFilterBounds();
+    const trackEl = durationMin.closest('.duration-range-track');
+    const valuesEl = durationMin.closest('.duration-filter-dd')?.querySelector('.duration-filter-values');
+    const fillEl = trackEl?.querySelector('[data-duration-range-fill]');
+
+    const syncDurationSliders = () => {
+      if (!bounds) return { min: 0, max: 0 };
+      let min = Number(durationMin.value);
+      let max = Number(durationMax.value);
+      if (min > max) {
+        if (document.activeElement === durationMin) {
+          max = min;
+          durationMax.value = String(max);
+        } else {
+          min = max;
+          durationMin.value = String(min);
+        }
+      }
+      const minLabel = formatDuration(min) || '0:00';
+      const maxLabel = formatDuration(max) || '0:00';
+      if (valuesEl) {
+        valuesEl.textContent = `${minLabel} – ${maxLabel}`;
+      }
+      if (fillEl) {
+        const span = bounds.max - bounds.min || 1;
+        fillEl.style.left = `${((min - bounds.min) / span) * 100}%`;
+        fillEl.style.width = `${((max - min) / span) * 100}%`;
+      }
+      return { min, max };
+    };
+
+    const onDurationInput = () => {
+      syncDurationSliders();
+    };
+
+    const onDurationCommit = () => {
+      if (!bounds) return;
+      const { min, max } = syncDurationSliders();
+      applyDurationFilterValues(min, max, bounds);
+    };
+
+    durationMin.addEventListener('mousedown', () => {
+      durationMin.style.zIndex = '4';
+      durationMax.style.zIndex = '3';
+    });
+    durationMax.addEventListener('mousedown', () => {
+      durationMax.style.zIndex = '4';
+      durationMin.style.zIndex = '3';
+    });
+    durationMin.addEventListener('touchstart', () => {
+      durationMin.style.zIndex = '4';
+      durationMax.style.zIndex = '3';
+    }, { passive: true });
+    durationMax.addEventListener('touchstart', () => {
+      durationMax.style.zIndex = '4';
+      durationMin.style.zIndex = '3';
+    }, { passive: true });
+
+    durationMin.addEventListener('input', onDurationInput);
+    durationMax.addEventListener('input', onDurationInput);
+    durationMin.addEventListener('change', onDurationCommit);
+    durationMax.addEventListener('change', onDurationCommit);
+  }
   app.querySelectorAll('[data-action="clear-filter"]').forEach((el) =>
     el.addEventListener('click', () => clearFilterCategories()),
   );
@@ -1434,9 +1680,16 @@ function bindEvents() {
   app.querySelectorAll('[data-action="toggle-create-cat"]').forEach((el) =>
     el.addEventListener('click', (e) => {
       const cat = e.currentTarget.dataset.cat;
-      if (cat) toggleCreateCategory(cat);
+      if (cat) {
+        toggleCreateCategory(cat);
+        updateGenreDesc(cat);
+      }
     }),
   );
+  document.querySelectorAll('#create-dd [data-genre]').forEach((el) => {
+    el.addEventListener('mouseenter', () => updateGenreDesc(el.dataset.genre));
+    el.addEventListener('focus', () => updateGenreDesc(el.dataset.genre));
+  });
   const createQ = app.querySelector('[data-action="create-cat-query"]');
   if (createQ) {
     createQ.addEventListener('input', (e) => setCreateCategoryQuery(e.currentTarget.value));
@@ -1579,7 +1832,7 @@ function handleOutsideClick(e) {
   if (!target || !target.closest) return;
   const closestDd = target.closest('.dropdown');
   const closestTrigger = target.closest(
-    '[data-action="toggle-filter-open"], [data-action="toggle-create-open"]',
+    '[data-action="toggle-filter-open"], [data-action="toggle-duration-filter-open"], [data-action="toggle-create-open"]',
   );
 
   if (state.filterOpen) {
@@ -1587,6 +1840,13 @@ function handleOutsideClick(e) {
     const isFilterTrigger = closestTrigger?.dataset.action === 'toggle-filter-open';
     if (!inFilterDd && !isFilterTrigger) {
       setFilterOpen(false);
+    }
+  }
+  if (state.durationFilterOpen) {
+    const inDurationDd = closestDd?.id === 'duration-filter-dd';
+    const isDurationTrigger = closestTrigger?.dataset.action === 'toggle-duration-filter-open';
+    if (!inDurationDd && !isDurationTrigger) {
+      setDurationFilterOpen(false);
     }
   }
   if (state.createCategoryOpen) {
@@ -1598,14 +1858,16 @@ function handleOutsideClick(e) {
   }
 }
 
-function handleProfileLinkClick(e) {
-  const link = e.target.closest && e.target.closest('a.profile-link');
+function handleCopyLinkClick(e) {
+  const link = e.target.closest && e.target.closest('a.profile-link, a.video-link');
   if (!link) return;
   e.preventDefault();
   const url = link.getAttribute('href');
+  if (!url) return;
+  const isVideo = link.classList.contains('video-link');
   copyToClipboard(url).then((ok) => {
     if (ok) {
-      setStatus('success', 'Profile link copied.');
+      setStatus('success', isVideo ? 'Video link copied.' : 'Profile link copied.');
     } else {
       setStatus('error', 'Could not copy link.');
     }
@@ -1664,7 +1926,7 @@ export function initUi() {
   setupPlayerFullscreen();
   if (!outsideInstalled) {
     document.addEventListener('mousedown', handleOutsideClick);
-    document.addEventListener('click', handleProfileLinkClick);
+    document.addEventListener('click', handleCopyLinkClick);
     outsideInstalled = true;
   }
 }

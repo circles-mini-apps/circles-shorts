@@ -1,6 +1,7 @@
 import { handleWalletChange, maybeBackgroundSync, syncFeed } from './app/actions.js';
 import { initUi } from './app/ui.js';
 import { applyHostContext, refreshShorts } from './app/state.js';
+import { hydrateVideoDurationCache } from './data/videoDuration.js';
 import { isMiniappMode, onAppData, onWalletChange } from './host/bridge.js';
 import { safelyParseHostData } from './utils/format.js';
 
@@ -17,6 +18,7 @@ function applyValidatedHostData(raw) {
   applyHostContext(next);
 }
 
+hydrateVideoDurationCache();
 refreshShorts();
 initUi();
 
