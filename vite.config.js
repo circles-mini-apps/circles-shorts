@@ -30,10 +30,11 @@ export default defineConfig(({ mode }) => {
         name: 'youtube-duration-api',
         configureServer(server) {
           server.middlewares.use(async (req, res, next) => {
-            const m = req.url?.match(/^\/api\/youtube-duration\/([\w-]{11})$/);
+            const m = req.url?.match(/^\/api\/(?:v2\/)?youtube-duration\/([\w-]{11})$/);
             if (!m) return next();
             try {
-              const durationSeconds = await fetchYoutubeDurationInnertube(m[1]);
+              const apiKey = env.YOUTUBE_API_KEY?.trim() || env.VITE_YOUTUBE_API_KEY?.trim() || '';
+              const durationSeconds = await fetchYoutubeDurationInnertube(m[1], { apiKey });
               res.setHeader('Content-Type', 'application/json');
               res.end(JSON.stringify({ durationSeconds }));
             } catch {

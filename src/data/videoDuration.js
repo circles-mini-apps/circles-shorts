@@ -136,7 +136,7 @@ function loadYouTubeIframeApi() {
 async function fetchYouTubeDurationViaProxy(videoId) {
   try {
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
-    const res = await fetch(`${origin}/api/youtube-duration/${encodeURIComponent(videoId)}`);
+    const res = await fetch(`${origin}/api/v2/youtube-duration/${encodeURIComponent(videoId)}`);
     if (!res.ok) return null;
     const data = await res.json();
     const seconds = data?.durationSeconds;
