@@ -4,7 +4,7 @@ import { getAddress, isAddress } from 'viem';
  * Circles organisation avatar that receives platform fees (publish + flag).
  * Override at build time with VITE_PLATFORM_ORG_ADDRESS.
  */
-const DEFAULT_PLATFORM_ORG = '0xFbAD3Ce0383D0aa3f4150EfE990acEa58d327B5f';
+const DEFAULT_PLATFORM_ORG = '0x507F542f14F55315F96aD1D454859EaA5c9E1923';
 
 function resolvePlatformOrgAddress() {
   const fromEnv = import.meta.env.VITE_PLATFORM_ORG_ADDRESS?.trim();

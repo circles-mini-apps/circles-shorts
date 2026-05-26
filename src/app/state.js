@@ -56,10 +56,16 @@ export const state = {
   createCategoryOpen: false,
   /** @type {string} */
   createCategoryQuery: '',
+  /** Focus genre search after opening the create-form dropdown. */
+  /** @type {boolean} */
+  focusCreateCategorySearch: false,
 
   /** Profile view active tab. */
   /** @type {ProfileTab} */
   profileTab: 'published',
+  /** Avatar address shown on profile view (defaults to connected wallet). */
+  /** @type {string | null} */
+  profileAddress: null,
 
   /** @type {ReturnType<typeof listShorts>} */
   shorts: [],
@@ -220,6 +226,9 @@ export function setView(view, selectedShortId = null, options = {}) {
   state.view = view;
   state.selectedShortId = selectedShortId;
   state.flagFormOpen = view === 'detail' && Boolean(options.openFlagForm);
+  if (view === 'profile') {
+    state.profileAddress = options.profileAddress?.trim() || state.connectedAddress || null;
+  }
   setStatus('idle', '');
   state.filterOpen = false;
   state.durationFilterOpen = false;
@@ -360,7 +369,11 @@ export function toggleCreateCategory(category) {
 }
 
 export function setCreateCategoryOpen(open) {
-  state.createCategoryOpen = Boolean(open);
+  const next = Boolean(open);
+  if (next && !state.createCategoryOpen) {
+    state.focusCreateCategorySearch = true;
+  }
+  state.createCategoryOpen = next;
   if (!state.createCategoryOpen) state.createCategoryQuery = '';
   notify();
 }

@@ -11,7 +11,7 @@ Embedded Circles miniapp where users publish short movies and pay CRC to interac
 | Upvote a short | **0.5 CRC** | The short's creator |
 | Comment on a short | **0.5 CRC** | The short's creator |
 
-Platform fees go to a **Circles organisation avatar**. Set `VITE_PLATFORM_ORG_ADDRESS` in `.env` before `npm run build` / deploy. Default if unset: `0xFbAD3Ce0383D0aa3f4150EfE990acEa58d327B5f`.
+Platform fees go to a **Circles organisation avatar**. Set `VITE_PLATFORM_ORG_ADDRESS` in `.env` before `npm run build` / deploy. Default if unset: `0x507F542f14F55315F96aD1D454859EaA5c9E1923`.
 
 ### Register the platform organisation
 

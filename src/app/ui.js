@@ -75,6 +75,22 @@ function sortOptionLabel(value) {
   return SORT_OPTIONS.find((o) => o.value === value)?.label || 'Sort';
 }
 
+function activeProfileAddress() {
+  return state.profileAddress || state.connectedAddress || '';
+}
+
+function isOwnProfileAddress(address) {
+  if (!address || !state.connectedAddress) return false;
+  return address.toLowerCase() === state.connectedAddress.toLowerCase();
+}
+
+/** @param {string} address @param {string} [label] */
+function userProfileLinkHtml(address, label) {
+  if (!address) return escapeHtml(label || '');
+  const display = label || profileNameFor(address) || shortAddress(address);
+  return `<button type="button" class="profile-link" data-action="go-user-profile" data-address="${escapeHtml(address)}" title="${escapeHtml(address)}">${escapeHtml(display)}</button>`;
+}
+
 function sortOptionIcon(value) {
   return SORT_OPTIONS.find((o) => o.value === value)?.icon || '⇅';
 }
@@ -280,6 +296,10 @@ function scrollToFlagVote() {
   scrollToModerationSection('[data-flag-vote]');
 }
 
+function scrollToComments() {
+  scrollToModerationSection('[data-comment-section]');
+}
+
 let listLazyObserver = null;
 let videoLazyObserver = null;
 
@@ -318,7 +338,8 @@ function visibleAddresses() {
       for (const c of s.comments || []) out.add(c.by);
     }
   } else if (state.view === 'profile') {
-    if (state.connectedAddress) out.add(state.connectedAddress);
+    const addr = activeProfileAddress();
+    if (addr) out.add(addr);
     for (const s of profileShorts()) out.add(s.creator);
   }
   return Array.from(out);
@@ -393,6 +414,13 @@ function rerender() {
   restoreLoadedPlayers();
   setupLazyObservers();
   restoreFocus(snap);
+  if (state.focusCreateCategorySearch) {
+    state.focusCreateCategorySearch = false;
+    requestAnimationFrame(() => {
+      const input = document.querySelector('[data-focus-key="create-cat-query"]');
+      input?.focus();
+    });
+  }
   const addrs = visibleAddresses();
   if (addrs.length) {
     ensureProfilesLoaded(addrs);
@@ -499,9 +527,11 @@ function header() {
       ? `<img class="avatar avatar--xs" src="${escapeHtml(me.imageUrl)}" alt="" />`
       : `<span class="avatar avatar--xs avatar--placeholder" aria-hidden="true">${escapeHtml(initial)}</span>`;
     const label = me?.name || shortAddress(state.connectedAddress);
+    const onOwnProfile =
+      state.view === 'profile' && isOwnProfileAddress(activeProfileAddress());
     walletBtn = `
       <button
-        class="wallet-btn ${state.view === 'profile' ? 'wallet-btn--active' : ''}"
+        class="wallet-btn ${onOwnProfile ? 'wallet-btn--active' : ''}"
         type="button"
         data-action="go-profile"
         title="${escapeHtml(state.connectedAddress)}"
@@ -992,10 +1022,7 @@ function shortCard(s) {
 
   const name = profileNameFor(s.creator);
   const byLabel = name || shortAddress(s.creator);
-  const profileUrl = circlesProfileUrl(s.creator);
-  const byHtml = profileUrl
-    ? `<a class="profile-link" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(s.creator)}">${escapeHtml(byLabel)}</a>`
-    : escapeHtml(byLabel);
+  const byHtml = userProfileLinkHtml(s.creator, byLabel);
   const isOwn =
     state.connectedAddress && s.creator.toLowerCase() === state.connectedAddress.toLowerCase();
   const upvoteTitle = isOwn ? 'You cannot upvote your own short' : `Pay ${PRICE_INTERACT_CRC} CRC to upvote`;
@@ -1259,7 +1286,7 @@ function createView() {
 }
 
 function profileShorts() {
-  const me = (state.connectedAddress || '').toLowerCase();
+  const me = activeProfileAddress().toLowerCase();
   if (!me) return [];
   const all = state.shorts;
   if (state.profileTab === 'published') {
@@ -1284,7 +1311,8 @@ function profileShorts() {
 }
 
 function profileView() {
-  if (!state.connectedAddress) {
+  const address = activeProfileAddress();
+  if (!address) {
     return `
       <button class="btn btn--ghost back" type="button" data-action="go-list">← Back</button>
       <section class="card">
@@ -1294,19 +1322,20 @@ function profileView() {
     `;
   }
 
-  const me = profileFor(state.connectedAddress);
-  const name = me?.name || shortAddress(state.connectedAddress);
-  const initial = ((me?.name || state.connectedAddress).trim().charAt(0) || '?').toUpperCase();
+  const isOwn = isOwnProfileAddress(address);
+  const me = profileFor(address);
+  const name = me?.name || shortAddress(address);
+  const initial = ((me?.name || address).trim().charAt(0) || '?').toUpperCase();
   const avatar = me?.imageUrl
     ? `<img class="avatar avatar--lg" src="${escapeHtml(me.imageUrl)}" alt="" />`
     : `<span class="avatar avatar--lg avatar--placeholder" aria-hidden="true">${escapeHtml(initial)}</span>`;
-  const profileUrl = circlesProfileUrl(state.connectedAddress);
-  const addressBtn = profileUrl
-    ? `<a class="profile-link profile-address" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(state.connectedAddress)}">${escapeHtml(shortAddress(state.connectedAddress))}</a>`
-    : `<span class="profile-address" title="${escapeHtml(state.connectedAddress)}">${escapeHtml(shortAddress(state.connectedAddress))}</span>`;
-
+  const profileUrl = circlesProfileUrl(address);
+  const copyBtn = profileUrl
+    ? `<button type="button" class="btn btn--ghost btn--icon profile-copy-btn" data-action="copy-profile-link" data-url="${escapeHtml(profileUrl)}" title="Copy profile link" aria-label="Copy profile link">🔗</button>`
+    : '';
+  const addressLabel = `<span class="profile-address" title="${escapeHtml(address)}">${escapeHtml(shortAddress(address))}</span>`;
   const all = state.shorts;
-  const meLower = state.connectedAddress.toLowerCase();
+  const meLower = address.toLowerCase();
   const counts = {
     published: all.filter((s) => s.creator?.toLowerCase() === meLower).length,
     upvoted: all.filter(
@@ -1319,8 +1348,8 @@ function profileView() {
     ).length,
   };
 
-  const flagWins = countFlaggerWins(state.connectedAddress, all);
-  const strikes = countCreatorViolations(state.connectedAddress, all);
+  const flagWins = countFlaggerWins(address, all);
+  const strikes = countCreatorViolations(address, all);
   const karmaHtml = `
     <div class="profile-karma-row">
       <button
@@ -1371,20 +1400,27 @@ function profileView() {
   `;
 
   const items = profileShorts();
-  const emptyLabel = {
-    published: 'You haven\'t published any shorts yet. Tap + to publish your first one.',
-    upvoted: 'You haven\'t upvoted any shorts yet.',
-    commented: 'You haven\'t commented on any shorts yet.',
-  }[state.profileTab];
+  const emptyLabel = isOwn
+    ? {
+        published: 'You haven\'t published any shorts yet. Tap + to publish your first one.',
+        upvoted: 'You haven\'t upvoted any shorts yet.',
+        commented: 'You haven\'t commented on any shorts yet.',
+      }[state.profileTab]
+    : {
+        published: 'No published shorts yet.',
+        upvoted: 'No upvoted shorts yet.',
+        commented: 'No commented shorts yet.',
+      }[state.profileTab];
   const empty = items.length === 0 ? `<p class="empty">${escapeHtml(emptyLabel)}</p>` : '';
 
   return `
     <button class="btn btn--ghost back" type="button" data-action="go-list">← Back</button>
     <section class="card profile-header">
+      ${copyBtn}
       ${avatar}
       <div class="profile-meta">
         <h2 class="profile-name">${escapeHtml(name)}</h2>
-        ${addressBtn}
+        ${addressLabel}
         ${karmaHtml}
       </div>
     </section>
@@ -1415,20 +1451,14 @@ function detailView() {
   const violated = isShortViolated(s);
   const underReview = isShortUnderReview(s);
   const creatorName = profileNameFor(s.creator) || shortAddress(s.creator);
-  const creatorUrl = circlesProfileUrl(s.creator);
-  const creatorHtml = creatorUrl
-    ? `<a class="profile-link" href="${escapeHtml(creatorUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(s.creator)}">${escapeHtml(creatorName)}</a>`
-    : escapeHtml(creatorName);
+  const creatorHtml = userProfileLinkHtml(s.creator, creatorName);
   const comments = (s.comments || [])
     .slice()
     .reverse()
     .map(
       (c) => {
         const cname = profileNameFor(c.by) || shortAddress(c.by);
-        const curl = circlesProfileUrl(c.by);
-        const chtml = curl
-          ? `<a class="profile-link" href="${escapeHtml(curl)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(c.by)}">${escapeHtml(cname)}</a>`
-          : escapeHtml(cname);
+        const chtml = userProfileLinkHtml(c.by, cname);
         return `
         <li class="comment">
           <div class="comment-meta muted">${chtml} · ${escapeHtml(timeAgo(c.createdAt))}</div>
@@ -1466,7 +1496,7 @@ function detailView() {
 
     ${renderModerationPanel(s)}
 
-    <section class="card">
+    <section class="card" data-comment-section>
       <h3>Comments (${s.comments?.length || 0})</h3>
       ${
         violated
@@ -1517,7 +1547,34 @@ function bindEvents() {
     el.addEventListener('click', () => setView('create')),
   );
   app.querySelectorAll('[data-action="go-profile"]').forEach((el) =>
-    el.addEventListener('click', () => setView('profile')),
+    el.addEventListener('click', () => {
+      if (state.connectedAddress) {
+        setView('profile', null, { profileAddress: state.connectedAddress });
+      } else {
+        setView('profile');
+      }
+    }),
+  );
+  app.querySelectorAll('[data-action="go-user-profile"]').forEach((el) =>
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const address = e.currentTarget.dataset.address;
+      if (address) setView('profile', null, { profileAddress: address });
+    }),
+  );
+  app.querySelectorAll('[data-action="copy-profile-link"]').forEach((el) =>
+    el.addEventListener('click', () => {
+      const url = el.dataset.url;
+      if (!url) return;
+      copyToClipboard(url).then((ok) => {
+        if (ok) {
+          setStatus('success', 'Profile link copied.');
+        } else {
+          setStatus('error', 'Could not copy link.');
+        }
+      });
+    }),
   );
   app.querySelectorAll('[data-action="profile-tab"]').forEach((el) =>
     el.addEventListener('click', (e) => {
@@ -1733,6 +1790,9 @@ function bindEvents() {
       if (cat) {
         toggleCreateCategory(cat);
         updateGenreDesc(cat);
+        if (e.currentTarget.closest('#create-dd')) {
+          setCreateCategoryOpen(false);
+        }
       }
     }),
   );
@@ -1777,7 +1837,10 @@ function bindEvents() {
   app.querySelectorAll('[data-action="card-comment"]').forEach((el) =>
     el.addEventListener('click', (e) => {
       const id = e.currentTarget.dataset.id;
-      if (id) setView('detail', id);
+      if (id) {
+        setView('detail', id);
+        scrollToComments();
+      }
     }),
   );
 
@@ -1916,15 +1979,14 @@ function handleOutsideClick(e) {
 }
 
 function handleCopyLinkClick(e) {
-  const link = e.target.closest && e.target.closest('a.profile-link, a.video-link');
+  const link = e.target.closest && e.target.closest('a.video-link');
   if (!link) return;
   e.preventDefault();
   const url = link.getAttribute('href');
   if (!url) return;
-  const isVideo = link.classList.contains('video-link');
   copyToClipboard(url).then((ok) => {
     if (ok) {
-      setStatus('success', isVideo ? 'Video link copied.' : 'Profile link copied.');
+      setStatus('success', 'Video link copied.');
     } else {
       setStatus('error', 'Could not copy link.');
     }
