@@ -1,10 +1,10 @@
 import { parseIso8601Duration } from '../utils/duration.js';
 
-const CACHE_KEY = 'circles-shorts:video-duration:v2';
+const CACHE_KEY = 'circles-shorts:video-duration:v3';
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_CONCURRENT = 2;
 
-/** @type {Map<string, number | null>} */
+/** @type {Map<string, number>} */
 const memoryCache = new Map();
 /** @type {Map<string, Promise<number | null>>} */
 const inflight = new Map();
@@ -79,24 +79,24 @@ export function parseVideoSource(rawUrl) {
  */
 export function getCachedVideoDuration(url) {
   if (!url) return undefined;
-  if (memoryCache.has(url)) return memoryCache.get(url) ?? null;
+  if (memoryCache.has(url)) return memoryCache.get(url);
   const disk = readDiskCache()[url];
   if (typeof disk === 'number' && disk > 0) {
     memoryCache.set(url, disk);
     return disk;
-  }
-  if (disk === null) {
-    memoryCache.set(url, null);
-    return null;
   }
   return undefined;
 }
 
 function rememberDuration(url, seconds) {
   const value = typeof seconds === 'number' && seconds > 0 ? Math.round(seconds) : null;
-  memoryCache.set(url, value);
-  writeDiskCache(url, value);
-  return value;
+  if (value != null) {
+    memoryCache.set(url, value);
+    writeDiskCache(url, value);
+    return value;
+  }
+  memoryCache.delete(url);
+  return null;
 }
 
 function loadYouTubeIframeApi() {
@@ -135,7 +135,8 @@ function loadYouTubeIframeApi() {
 /** @param {string} videoId */
 async function fetchYouTubeDurationViaProxy(videoId) {
   try {
-    const res = await fetch(`/api/youtube-duration/${encodeURIComponent(videoId)}`);
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const res = await fetch(`${origin}/api/youtube-duration/${encodeURIComponent(videoId)}`);
     if (!res.ok) return null;
     const data = await res.json();
     const seconds = data?.durationSeconds;
@@ -219,11 +220,11 @@ async function fetchYouTubeDurationIframe(videoId) {
 
 /** @param {string} videoId */
 async function fetchYouTubeDuration(videoId) {
-  const fromDataApi = await fetchYouTubeDurationViaDataApi(videoId);
-  if (fromDataApi) return fromDataApi;
-
   const fromProxy = await fetchYouTubeDurationViaProxy(videoId);
   if (fromProxy) return fromProxy;
+
+  const fromDataApi = await fetchYouTubeDurationViaDataApi(videoId);
+  if (fromDataApi) return fromDataApi;
 
   return fetchYouTubeDurationIframe(videoId);
 }
@@ -331,7 +332,6 @@ export function hydrateVideoDurationCache() {
   const disk = readDiskCache();
   for (const [url, sec] of Object.entries(disk)) {
     if (typeof sec === 'number' && sec > 0) memoryCache.set(url, sec);
-    else if (sec === null) memoryCache.set(url, null);
   }
 }
 
