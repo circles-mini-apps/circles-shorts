@@ -12,6 +12,12 @@ export const FLAG_CATEGORIES = [
       'The title, genre, or description does not match the video (e.g., wrong category, misleading title, clickbait label, or content that is not what was advertised).',
   },
   {
+    value: 'not-a-short',
+    label: 'Not a Short Movie',
+    description:
+      'The linked video is not short-form content — for example a full-length film, TV episode, livestream, slideshow, or other material that does not belong on Circles Shorts.',
+  },
+  {
     value: 'duplicate-content',
     label: 'Duplicate Content',
     description:
