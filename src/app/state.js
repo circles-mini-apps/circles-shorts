@@ -13,8 +13,8 @@ export const state = {
   connectedAddress: null,
   /** @type {Record<string, unknown>} */
   hostContext: {},
-  /** @type {{ kind: 'idle' | 'pending' | 'success' | 'error'; message: string }} */
-  status: { kind: 'idle', message: '' },
+  /** @type {{ kind: 'idle' | 'pending' | 'success' | 'error'; message: string; highlight: string | null }} */
+  status: { kind: 'idle', message: '', highlight: null },
   /** @type {View} */
   view: 'list',
   /** @type {string | null} */
@@ -190,20 +190,26 @@ const STATUS_DISMISS_MS = 4000;
 /** @type {ReturnType<typeof setTimeout> | null} */
 let statusDismissTimer = null;
 
-export function setStatus(kind, message) {
+export function setStatus(kind, message, options = {}) {
   if (statusDismissTimer) {
     clearTimeout(statusDismissTimer);
     statusDismissTimer = null;
   }
 
-  state.status = { kind, message };
+  const highlight = kind === 'idle' ? null : options.highlight || null;
+  state.status = { kind, message, highlight };
   notifyStatus();
 
   if (kind === 'success' || kind === 'error') {
     const captured = message;
+    const capturedHighlight = highlight;
     statusDismissTimer = setTimeout(() => {
       statusDismissTimer = null;
-      if (state.status.kind === kind && state.status.message === captured) {
+      if (
+        state.status.kind === kind &&
+        state.status.message === captured &&
+        state.status.highlight === capturedHighlight
+      ) {
         setStatus('idle', '');
       }
     }, STATUS_DISMISS_MS);

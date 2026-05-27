@@ -518,10 +518,21 @@ function rerender() {
   }
 }
 
+function formatStatusMessage({ message, highlight }) {
+  if (!highlight || !message.includes(highlight)) {
+    return escapeHtml(message);
+  }
+  const idx = message.indexOf(highlight);
+  const before = escapeHtml(message.slice(0, idx));
+  const name = escapeHtml(highlight);
+  const after = escapeHtml(message.slice(idx + highlight.length));
+  return `${before}<strong class="snackbar-highlight">${name}</strong>${after}`;
+}
+
 function statusBanner() {
   const { status } = state;
   if (status.kind === 'idle' || !status.message) return '';
-  return `<div class="snackbar snackbar--${status.kind}" role="status" aria-live="polite">${escapeHtml(status.message)}</div>`;
+  return `<div class="snackbar snackbar--${status.kind}" role="status" aria-live="polite">${formatStatusMessage(status)}</div>`;
 }
 
 function paginateShorts(shorts) {

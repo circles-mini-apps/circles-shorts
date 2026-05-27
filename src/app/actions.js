@@ -15,6 +15,7 @@ import { crcToAtto, isDemoMode, sendCrc } from '../chain/circlesTransfer.js';
 import { PLATFORM_ORG } from '../chain/platformOrg.js';
 import { isPinningEnabled, pinJson } from '../data/ipfs.js';
 import { refreshFeedFromRemote } from '../data/feed.js';
+import { resolveProfileDisplayName } from '../data/profiles.js';
 import { resolveVideoDuration } from '../data/videoDuration.js';
 import { MIN_MODERATION_VOTES } from '../data/moderation.js';
 import {
@@ -119,13 +120,16 @@ export function maybeBackgroundSync(minIntervalMs = 30_000) {
 }
 
 async function payCrc(toAddr, amountCrc, label, { cid } = {}) {
+  const recipient = await resolveProfileDisplayName(toAddr);
   if (isDemoMode()) {
-    setStatus('pending', `Demo mode: skipping ${amountCrc} CRC ${label}…`);
+    const message = `Demo mode: skipping ${amountCrc} CRC ${label} to ${recipient}…`;
+    setStatus('pending', message, { highlight: recipient });
     return [];
   }
   const from = requireConnected();
   const atto = crcToAtto(amountCrc);
-  setStatus('pending', `Paying ${amountCrc} CRC ${label}…`);
+  const message = `Paying ${recipient} ${amountCrc} CRC ${label}…`;
+  setStatus('pending', message, { highlight: recipient });
   return sendCrc(from, toAddr, atto, { cid });
 }
 

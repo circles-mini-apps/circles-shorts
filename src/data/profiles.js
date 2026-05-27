@@ -2,6 +2,7 @@ import { CirclesRpc } from '@aboutcircles/sdk-rpc';
 import { circlesConfig } from '@aboutcircles/sdk-utils';
 import { getAddress } from 'viem';
 import { setProfiles, state } from '../app/state.js';
+import { shortAddress } from '../utils/format.js';
 
 let rpc = null;
 let rpcUrl = null;
@@ -76,4 +77,12 @@ export function profileFor(address) {
 
 export function profileNameFor(address) {
   return profileFor(address)?.name || null;
+}
+
+/** Load profile if needed and return Circles name, or a short address fallback. */
+export async function resolveProfileDisplayName(address) {
+  const a = checksum(address);
+  if (!a) return 'unknown';
+  await ensureProfilesLoaded([a]);
+  return profileNameFor(a) || shortAddress(a);
 }

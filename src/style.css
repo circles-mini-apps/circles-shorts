@@ -564,6 +564,10 @@ a.profile-address.profile-link:hover {
   border-color: #fcd34d;
 }
 
+.snackbar-highlight {
+  font-weight: 700;
+}
+
 .snackbar--success {
   background: #d1fae5;
   color: #065f46;
