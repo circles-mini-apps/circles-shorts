@@ -12,8 +12,9 @@
 const PIN_ENDPOINT = 'https://api.pinata.cloud/pinning/pinJSONToIPFS';
 const PINLIST_ENDPOINT = 'https://api.pinata.cloud/data/pinList';
 
-/** App-wide namespace tag added to every pinned object's keyvalues. */
-export const APP_NAMESPACE = 'circles-shorts';
+import { APP_NAMESPACE, LEGACY_APP_NAMESPACE } from '../app/config.js';
+
+export { APP_NAMESPACE };
 
 function jwt() {
   return import.meta.env.VITE_PINATA_JWT || '';
@@ -81,16 +82,16 @@ export async function pinJson(content, { name = APP_NAMESPACE, keyvalues = {} } 
 /**
  * Query Pinata's pinList endpoint and return matching pins.
  * `keyvalues` is matched as exact-equality filters.
- * Always scoped to `app=circles-shorts` so we never see noise from other apps.
+ * Always scoped to `app=shorts` (and legacy `circles-shorts` via `listPinnedCidsAllNamespaces`).
  *
  * Returns: Array<{ cid, name, keyvalues, pinnedAt }>
  */
-export async function listPinnedCids({ keyvalues = {}, limit = 1000 } = {}) {
+export async function listPinnedCids({ keyvalues = {}, limit = 1000, appNamespace = APP_NAMESPACE } = {}) {
   const token = jwt();
   if (!token) {
     throw new Error('IPFS pinning is not configured (set VITE_PINATA_JWT)');
   }
-  const tagged = { app: APP_NAMESPACE, ...keyvalues };
+  const tagged = { app: appNamespace, ...keyvalues };
   const qvParts = Object.entries(tagged).map(
     ([k, v]) => `metadata[keyvalues][${k}]=${encodeURIComponent(JSON.stringify({ value: String(v), op: 'eq' }))}`,
   );
@@ -116,6 +117,22 @@ export async function listPinnedCids({ keyvalues = {}, limit = 1000 } = {}) {
     keyvalues: r.metadata?.keyvalues || {},
     pinnedAt: r.date_pinned || null,
   }));
+}
+
+/** Query current and legacy app namespaces, deduped by CID. */
+export async function listPinnedCidsAllNamespaces(options = {}) {
+  const [current, legacy] = await Promise.all([
+    listPinnedCids({ ...options, appNamespace: APP_NAMESPACE }),
+    listPinnedCids({ ...options, appNamespace: LEGACY_APP_NAMESPACE }),
+  ]);
+  const seen = new Set();
+  const out = [];
+  for (const pin of [...current, ...legacy]) {
+    if (seen.has(pin.cid)) continue;
+    seen.add(pin.cid);
+    out.push(pin);
+  }
+  return out;
 }
 
 const memoryCache = new Map();

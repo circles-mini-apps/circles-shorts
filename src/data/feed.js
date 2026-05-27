@@ -12,8 +12,9 @@
 import {
   fetchJsonByCid,
   isPinningEnabled,
-  listPinnedCids,
+  listPinnedCidsAllNamespaces,
 } from './ipfs.js';
+import { isContentKind } from '../app/config.js';
 import {
   upsertRemoteComment,
   upsertRemoteShort,
@@ -49,31 +50,31 @@ async function pMap(items, fn, concurrency = MAX_CONCURRENT_FETCHES) {
 }
 
 function isShortContent(obj) {
-  return obj && obj.kind === 'circles-shorts:short' && typeof obj.title === 'string' && typeof obj.url === 'string';
+  return isContentKind(obj, 'short') && typeof obj.title === 'string' && typeof obj.url === 'string';
 }
 
 function isCommentContent(obj) {
-  return obj && obj.kind === 'circles-shorts:comment' && typeof obj.text === 'string';
+  return isContentKind(obj, 'comment') && typeof obj.text === 'string';
 }
 
 function isUpvoteContent(obj) {
-  return obj && obj.kind === 'circles-shorts:upvote' && typeof obj.voter === 'string';
+  return isContentKind(obj, 'upvote') && typeof obj.voter === 'string';
 }
 
 function isSaveContent(obj) {
-  return obj && obj.kind === 'circles-shorts:save' && typeof obj.saver === 'string';
+  return isContentKind(obj, 'save') && typeof obj.saver === 'string';
 }
 
 function isFlagContent(obj) {
-  return obj && obj.kind === 'circles-shorts:flag' && typeof obj.flagger === 'string';
+  return isContentKind(obj, 'flag') && typeof obj.flagger === 'string';
 }
 
 function isModVoteContent(obj) {
-  return obj && obj.kind === 'circles-shorts:moderation-vote' && typeof obj.voter === 'string';
+  return isContentKind(obj, 'moderation-vote') && typeof obj.voter === 'string';
 }
 
 function isRulingContent(obj) {
-  return obj && obj.kind === 'circles-shorts:moderation-ruling' && typeof obj.outcome === 'string';
+  return isContentKind(obj, 'moderation-ruling') && typeof obj.outcome === 'string';
 }
 
 /**
@@ -88,7 +89,7 @@ export async function refreshFeedFromRemote() {
   }
 
   // 1. Discover all shorts.
-  const shortPins = await listPinnedCids({ keyvalues: { kind: 'short' } });
+  const shortPins = await listPinnedCidsAllNamespaces({ keyvalues: { kind: 'short' } });
   const shortRecords = await pMap(shortPins, async (pin) => {
     const data = await fetchJsonByCid(pin.cid);
     return { pin, data };
@@ -112,12 +113,12 @@ export async function refreshFeedFromRemote() {
 
   // 2. Discover comments, upvotes, flags, moderation votes, rulings.
   const [commentPins, upvotePins, savePins, flagPins, modVotePins, rulingPins] = await Promise.all([
-    listPinnedCids({ keyvalues: { kind: 'comment' } }),
-    listPinnedCids({ keyvalues: { kind: 'upvote' } }),
-    listPinnedCids({ keyvalues: { kind: 'save' } }),
-    listPinnedCids({ keyvalues: { kind: 'flag' } }),
-    listPinnedCids({ keyvalues: { kind: 'mod-vote' } }),
-    listPinnedCids({ keyvalues: { kind: 'ruling' } }),
+    listPinnedCidsAllNamespaces({ keyvalues: { kind: 'comment' } }),
+    listPinnedCidsAllNamespaces({ keyvalues: { kind: 'upvote' } }),
+    listPinnedCidsAllNamespaces({ keyvalues: { kind: 'save' } }),
+    listPinnedCidsAllNamespaces({ keyvalues: { kind: 'flag' } }),
+    listPinnedCidsAllNamespaces({ keyvalues: { kind: 'mod-vote' } }),
+    listPinnedCidsAllNamespaces({ keyvalues: { kind: 'ruling' } }),
   ]);
 
   const commentRecords = await pMap(commentPins, async (pin) => {

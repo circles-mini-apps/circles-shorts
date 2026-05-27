@@ -15,13 +15,13 @@ export const FLAG_CATEGORIES = [
     value: 'not-a-short',
     label: 'Not a Short Movie',
     description:
-      'The linked video is not short-form content — for example a full-length film, TV episode, livestream, slideshow, or other material that does not belong on Circles Shorts.',
+      'The linked video is not short-form content — for example a full-length film, TV episode, livestream, slideshow, or other material that does not belong on Shorts.',
   },
   {
     value: 'duplicate-content',
     label: 'Duplicate Content',
     description:
-      'This short is the same video or substantially the same content already published on Circles Shorts by this creator or someone else.',
+      'This short is the same video or substantially the same content already published on Shorts by this creator or someone else.',
   },
   {
     value: 'hate-speech',

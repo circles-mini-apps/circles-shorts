@@ -14,6 +14,7 @@ import { formatPublishPriceLabel, PRAISE_KARMA_TIP, STRIKE_KARMA_TIP, publishPri
 import { isDemoMode } from '../chain/circlesTransfer.js';
 import { allKnownCategories, genreDescription, submittedGenresWithCounts } from '../data/categories.js';
 import { computeLeaderboard, formatLeaderboardCrc, sortLeaderboardRows } from '../data/leaderboard.js';
+import { APP_NAME } from './config.js';
 import { FLAG_CATEGORIES, flagCategoryLabel } from '../data/flagReasons.js';
 import {
   MIN_MODERATION_VOTES,
@@ -638,7 +639,7 @@ function header() {
   return `
     <header class="topbar">
       <div class="brand">
-        <button class="brand-btn" data-action="go-list" type="button">🎬 Circles Shorts</button>
+        <button class="brand-btn" data-action="go-list" type="button">${APP_NAME}</button>
         <span class="brand-meta muted">${escapeHtml(countLabel)}</span>
         ${demo}
       </div>

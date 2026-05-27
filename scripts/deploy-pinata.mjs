@@ -70,7 +70,7 @@ async function main() {
 
   // Build multipart form with folder-relative paths so Pinata preserves structure.
   const form = new FormData();
-  const folderName = `circles-shorts-${Date.now()}`;
+  const folderName = `shorts-${Date.now()}`;
   for (const filePath of files) {
     const rel = relative(distDir, filePath).split(sep).join('/');
     const buf = await readFile(filePath);
@@ -80,7 +80,7 @@ async function main() {
     'pinataMetadata',
     JSON.stringify({
       name: folderName,
-      keyvalues: { app: 'circles-shorts', kind: 'static-site' },
+      keyvalues: { app: 'shorts', kind: 'static-site' },
     }),
   );
   form.append('pinataOptions', JSON.stringify({ cidVersion: 1, wrapWithDirectory: false }));

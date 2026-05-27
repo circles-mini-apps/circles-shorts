@@ -1,4 +1,5 @@
 import { getAddress, isAddress } from 'viem';
+import { APP_SLUG } from '../app/config.js';
 
 /**
  * Circles organisation avatar that receives platform fees (publish + flag).
@@ -12,7 +13,7 @@ function resolvePlatformOrgAddress() {
   if (!isAddress(raw)) {
     // eslint-disable-next-line no-console
     console.warn(
-      `[circles-shorts] Invalid VITE_PLATFORM_ORG_ADDRESS "${raw}" — using default ${DEFAULT_PLATFORM_ORG}`,
+      `[${APP_SLUG}] Invalid VITE_PLATFORM_ORG_ADDRESS "${raw}" — using default ${DEFAULT_PLATFORM_ORG}`,
     );
     return getAddress(DEFAULT_PLATFORM_ORG);
   }

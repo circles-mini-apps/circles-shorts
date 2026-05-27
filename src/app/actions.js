@@ -1,4 +1,5 @@
 import { getAddress, isAddress } from 'viem';
+import { contentKind } from './config.js';
 import {
   addShort,
   addFlag,
@@ -155,7 +156,7 @@ async function maybePublishRuling(shortId) {
   if (m.rulingCid) return;
 
   const payload = {
-    kind: 'circles-shorts:moderation-ruling',
+    kind: contentKind('moderation-ruling'),
     v: 1,
     shortCid: short.cid,
     flagCid: m.activeFlag?.cid || null,
@@ -202,7 +203,7 @@ export async function publishShort({ title, url, categories }) {
     }
 
     const payload = {
-      kind: 'circles-shorts:short',
+      kind: contentKind('short'),
       v: 1,
       title: cleanTitle,
       url: cleanUrl,
@@ -263,7 +264,7 @@ export async function upvote(shortId) {
     });
 
     const upvotePayload = {
-      kind: 'circles-shorts:upvote',
+      kind: contentKind('upvote'),
       v: 1,
       shortCid: short.cid || null,
       voter,
@@ -298,7 +299,7 @@ export async function save(shortId) {
     saveShort(shortId, saver);
 
     const savePayload = {
-      kind: 'circles-shorts:save',
+      kind: contentKind('save'),
       v: 1,
       shortCid: short.cid || null,
       saver,
@@ -335,7 +336,7 @@ export async function comment(shortId, text) {
     });
 
     const payload = {
-      kind: 'circles-shorts:comment',
+      kind: contentKind('comment'),
       v: 1,
       shortCid: short.cid || null,
       shortId: short.id,
@@ -369,7 +370,7 @@ export async function flagShort(shortId, { category, explanation }) {
     if (!short.cid) throw new Error('Short must be pinned to IPFS before it can be flagged');
 
     const flagPayload = {
-      kind: 'circles-shorts:flag',
+      kind: contentKind('flag'),
       v: 1,
       shortCid: short.cid,
       shortId: short.id,
@@ -420,7 +421,7 @@ export async function voteModeration(shortId, verdict) {
     if (!short.cid) throw new Error('Short is missing IPFS reference');
 
     const votePayload = {
-      kind: 'circles-shorts:moderation-vote',
+      kind: contentKind('moderation-vote'),
       v: 1,
       shortCid: short.cid,
       flagCid: flag.cid,

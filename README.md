@@ -1,4 +1,4 @@
-# Circles Shorts
+# 🩳 Shorts
 
 Embedded Circles miniapp where users publish short movies and pay CRC to interact.
 
@@ -23,8 +23,8 @@ Use a **dedicated Safe** for the treasury — not your personal Circles human wa
    ```
    ORG_REGISTER_PRIVATE_KEY=0x...
    ORG_SAFE_ADDRESS=0x...          # the Safe address
-   ORG_NAME=Circles Shorts
-   ORG_DESCRIPTION=Platform treasury for Circles Shorts
+   ORG_NAME=Shorts
+   ORG_DESCRIPTION=Platform treasury for Shorts
    ```
 4. Register on Circles:
    ```bash
@@ -78,7 +78,7 @@ Restart `npm run dev`, then register the full `https://…trycloudflare.com` URL
 2. In a second terminal: `npm run tunnel` (or `cloudflared tunnel --url http://127.0.0.1:5173`).
 3. Update cloudflared: `brew upgrade cloudflared`.
 4. Retry in a few minutes, or disable VPN/ad blockers for `trycloudflare.com`.
-5. **Skip the tunnel** for host testing: use the deployed app at `https://circles-shorts.pages.dev` instead of localhost.
+5. **Skip the tunnel** for host testing: use the deployed app at `https://shorts.pages.dev` instead of localhost.
 
 **Alternatives if quick tunnels keep failing**
 
@@ -92,7 +92,7 @@ Set `VITE_DEMO_NO_CRC=true` in `.env` to skip CRC transfers (shorts/comments/upv
 ## Storage / data model
 
 - **Local cache**: `src/data/storage.js` keeps a `localStorage`-backed copy of every short, comment, and upvote the browser has seen. The UI renders from this cache.
-- **Content layer (IPFS via Pinata)**: every publish, comment, and upvote pins a JSON payload through `src/data/ipfs.js`. Each pin carries `keyvalues = { app: 'circles-shorts', kind: 'short' | 'comment' | 'upvote', shortCid?, creator?, voter?, author? }` so the app can re-discover them later.
+- **Content layer (IPFS via Pinata)**: every publish, comment, and upvote pins a JSON payload through `src/data/ipfs.js`. Each pin carries `keyvalues = { app: 'shorts', kind: 'short' | 'comment' | 'upvote', shortCid?, creator?, voter?, author? }` so the app can re-discover them later. Legacy pins tagged `circles-shorts` are still synced.
 - **Discovery**: `src/data/feed.js#refreshFeedFromRemote` calls Pinata's `pinList` endpoint to enumerate all shorts/comments/upvotes for the app, fetches each by CID through public IPFS gateways, and upserts the results into local storage. Runs on boot, on tab focus, on wallet change, and every minute.
 - **On-chain anchor (Circles V2 `transferData`)**: every CRC transfer carries the matching CID encoded with `encodeCrcV2TransferData([cid], 0x0003)` from `@aboutcircles/sdk-utils`. Any observer can decode a transaction's `transferData`, fetch the CID from IPFS, and verify what the user paid for.
 
@@ -114,7 +114,7 @@ Deploy:
 npm run deploy
 ```
 
-This runs `npm run build` and then `wrangler pages deploy dist --project-name=circles-shorts`. First run creates the project, subsequent runs push a new version. You get a stable URL like `https://circles-shorts.pages.dev` plus a unique preview URL per deploy.
+This runs `npm run build` and then `wrangler pages deploy dist --project-name=shorts`. First run creates the project, subsequent runs push a new version. You get a stable URL like `https://shorts.pages.dev` plus a unique preview URL per deploy.
 
 Paste the stable URL into the Circles miniapp host. The `VITE_PINATA_JWT` is inlined into the JS bundle at build time, so no extra Cloudflare env config is needed.
 

@@ -1,6 +1,24 @@
 import { moderationSnapshot } from './moderation.js';
 
-const KEY = 'circles-shorts:v1';
+const KEY = 'shorts:v1';
+const LEGACY_KEY = 'circles-shorts:v1';
+
+function readRawStorage() {
+  if (typeof localStorage === 'undefined') return null;
+  let raw = localStorage.getItem(KEY);
+  if (!raw) {
+    raw = localStorage.getItem(LEGACY_KEY);
+    if (raw) {
+      try {
+        localStorage.setItem(KEY, raw);
+        localStorage.removeItem(LEGACY_KEY);
+      } catch {
+        /* ignore quota */
+      }
+    }
+  }
+  return raw;
+}
 
 function nowMs() {
   return Date.now();
@@ -13,7 +31,7 @@ function uid() {
 function read() {
   if (typeof localStorage === 'undefined') return { shorts: [] };
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = readRawStorage();
     if (!raw) return { shorts: [] };
     const parsed = JSON.parse(raw);
     if (!parsed || !Array.isArray(parsed.shorts)) return { shorts: [] };

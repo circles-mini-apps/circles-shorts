@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Register a Circles organisation avatar for Circles Shorts platform fees.
+ * Register a Circles organisation avatar for Shorts platform fees.
  *
  * Usage:
  *   npm run register:org
@@ -8,7 +8,7 @@
  * Env (.env or shell):
  *   ORG_REGISTER_PRIVATE_KEY=0x...     required — Safe owner private key
  *   ORG_SAFE_ADDRESS=0x...             required — Safe that becomes the organisation
- *   ORG_NAME=Circles Shorts            optional
+ *   ORG_NAME=Shorts                       optional
  *   ORG_DESCRIPTION=...                optional
  *   ORG_AVATAR_URL=                    optional profile image URL
  *   ORG_PREVIEW_IMAGE_URL=             optional preview image URL
@@ -72,10 +72,10 @@ async function main() {
   const sdk = new Sdk({ ...circlesConfig[100], circlesRpcUrl: rpcUrl }, runner);
 
   const orgAvatar = await sdk.register.asOrganization({
-    name: process.env.ORG_NAME?.trim() || 'Circles Shorts',
+    name: process.env.ORG_NAME?.trim() || 'Shorts',
     description:
       process.env.ORG_DESCRIPTION?.trim() ||
-      'Circles-enabled community treasury for Circles Shorts publish and flag fees.',
+      'Circles-enabled community treasury for Shorts publish and flag fees.',
     avatarUrl: process.env.ORG_AVATAR_URL?.trim() || '',
     previewImageUrl: process.env.ORG_PREVIEW_IMAGE_URL?.trim() || '',
   });

@@ -1,6 +1,7 @@
 import { parseIso8601Duration } from '../utils/duration.js';
 
-const CACHE_KEY = 'circles-shorts:video-duration:v3';
+const CACHE_KEY = 'shorts:video-duration:v3';
+const LEGACY_CACHE_KEY = 'circles-shorts:video-duration:v3';
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_CONCURRENT = 2;
 
@@ -13,7 +14,18 @@ let ytApiPromise = null;
 
 function readDiskCache() {
   try {
-    const raw = localStorage.getItem(CACHE_KEY);
+    let raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) {
+      raw = localStorage.getItem(LEGACY_CACHE_KEY);
+      if (raw) {
+        try {
+          localStorage.setItem(CACHE_KEY, raw);
+          localStorage.removeItem(LEGACY_CACHE_KEY);
+        } catch {
+          /* ignore quota */
+        }
+      }
+    }
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
