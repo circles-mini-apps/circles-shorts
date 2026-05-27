@@ -2,9 +2,9 @@ import { listShorts, reconcileAllModeration } from '../data/storage.js';
 import { ensureVideoDurations } from '../data/videoDuration.js';
 
 /** @typedef {'disconnected' | 'connecting' | 'connected' | 'error'} WalletPhase */
-/** @typedef {'recent' | 'top' | 'comments'} SortMode */
-/** @typedef {'list' | 'create' | 'detail' | 'profile'} View */
-/** @typedef {'published' | 'upvoted' | 'commented'} ProfileTab */
+/** @typedef {'recent' | 'top' | 'comments' | 'saved'} SortMode */
+/** @typedef {'list' | 'create' | 'detail' | 'profile' | 'leaderboard'} View */
+/** @typedef {'published' | 'upvoted' | 'commented' | 'saved'} ProfileTab */
 
 export const state = {
   /** @type {WalletPhase} */
@@ -91,6 +91,20 @@ export const state = {
   listScrollY: null,
   /** @type {{ scrollY: number, visibleCount: number } | null} */
   pendingListRestore: null,
+
+  /** Saved views when opening a profile (back restores scroll + context). */
+  /** @type {{ view: View, scrollY: number, selectedShortId: string | null, profileAddress: string | null, listVisibleCount: number }[]} */
+  navStack: [],
+  /** One-shot scroll restore after goBack(). */
+  /** @type {number | null} */
+  scrollRestoreY: null,
+  /** Scroll profile to top on the next render (forward profile navigation). */
+  /** @type {boolean} */
+  scrollProfileToTop: false,
+
+  /** Leaderboard column sort (rankings view). */
+  /** @type {'total' | 'uploaded' | 'liked' | 'saved' | 'commented' | 'spentCrc' | 'earnedCrc'} */
+  leaderboardSort: 'earnedCrc',
 
   /** Runtime cache keyed by video URL (seconds). */
   /** @type {Record<string, number | null>} */
@@ -205,6 +219,41 @@ export function loadMoreListItems() {
   notify();
 }
 
+function captureNavFrame() {
+  return {
+    view: state.view,
+    scrollY: window.scrollY,
+    selectedShortId: state.selectedShortId,
+    profileAddress: state.profileAddress,
+    listVisibleCount: state.listVisibleCount,
+  };
+}
+
+function resetTransientUiState() {
+  setStatus('idle', '');
+  state.filterOpen = false;
+  state.durationFilterOpen = false;
+  state.sortOpen = false;
+  state.createCategoryOpen = false;
+}
+
+export function goBack() {
+  const prev = state.navStack.pop();
+  if (!prev) {
+    setView('list');
+    return;
+  }
+
+  state.view = prev.view;
+  state.selectedShortId = prev.selectedShortId;
+  state.profileAddress = prev.profileAddress;
+  state.listVisibleCount = prev.listVisibleCount;
+  state.scrollRestoreY = prev.scrollY;
+  state.flagFormOpen = false;
+  resetTransientUiState();
+  notify();
+}
+
 export function setView(view, selectedShortId = null, options = {}) {
   const from = state.view;
 
@@ -223,17 +272,29 @@ export function setView(view, selectedShortId = null, options = {}) {
     state.listScrollY = null;
   }
 
+  if (view === 'profile') {
+    const newAddress = options.profileAddress?.trim() || state.connectedAddress || null;
+    const sameProfile =
+      from === 'profile' &&
+      state.profileAddress?.toLowerCase() === newAddress?.toLowerCase();
+    if (!sameProfile) {
+      state.navStack.push(captureNavFrame());
+    }
+    state.scrollProfileToTop = true;
+  } else if (view === 'leaderboard' && from !== 'leaderboard') {
+    state.navStack.push(captureNavFrame());
+    state.scrollProfileToTop = true;
+  } else if (view === 'list') {
+    state.navStack = [];
+  }
+
   state.view = view;
   state.selectedShortId = selectedShortId;
   state.flagFormOpen = view === 'detail' && Boolean(options.openFlagForm);
   if (view === 'profile') {
     state.profileAddress = options.profileAddress?.trim() || state.connectedAddress || null;
   }
-  setStatus('idle', '');
-  state.filterOpen = false;
-  state.durationFilterOpen = false;
-  state.sortOpen = false;
-  state.createCategoryOpen = false;
+  resetTransientUiState();
   if (view === 'create') {
     state.createDraft = { title: '', url: '', categories: [] };
     state.createCategoryQuery = '';
@@ -247,6 +308,7 @@ export function setFlagFormOpen(open) {
 }
 
 export function setProfileTab(tab) {
+  if (!['published', 'upvoted', 'commented', 'saved'].includes(tab)) return;
   state.profileTab = tab;
   resetListPagination();
   notify();
@@ -342,10 +404,17 @@ export function setFilterQuery(q) {
 }
 
 export function setSort(sort) {
-  if (!['recent', 'top', 'comments'].includes(sort)) return;
+  if (!['recent', 'top', 'comments', 'saved'].includes(sort)) return;
   state.sort = sort;
   state.sortOpen = false;
   resetListPagination();
+  notify();
+}
+
+export function setLeaderboardSort(sort) {
+  const allowed = ['total', 'uploaded', 'liked', 'saved', 'commented', 'spentCrc', 'earnedCrc'];
+  if (!allowed.includes(sort)) return;
+  state.leaderboardSort = sort;
   notify();
 }
 

@@ -74,8 +74,10 @@ export function addShort({ title, url, categories, creator, cid = null, duration
     creator,
     createdAt: nowMs(),
     upvotes: 0,
+    saves: 0,
     comments: [],
     voters: [],
+    savers: [],
     cid,
     ...(typeof durationSeconds === 'number' && durationSeconds > 0 ? { durationSeconds } : {}),
   };
@@ -90,6 +92,25 @@ export function upvoteShort(id, voter) {
   if (!short) throw new Error('Short not found');
   short.upvotes = (short.upvotes || 0) + 1;
   short.voters = Array.from(new Set([...(short.voters || []), voter]));
+  write(state);
+  return short;
+}
+
+export function isSavedBy(short, address) {
+  if (!short || !address) return false;
+  return (short.savers || []).some((v) => v.toLowerCase() === address.toLowerCase());
+}
+
+export function saveShort(id, saver) {
+  const state = read();
+  const short = state.shorts.find((s) => s.id === id);
+  if (!short) throw new Error('Short not found');
+  short.savers = short.savers || [];
+  if (short.savers.some((v) => v.toLowerCase() === saver.toLowerCase())) {
+    return short;
+  }
+  short.savers.push(saver);
+  short.saves = short.savers.length;
   write(state);
   return short;
 }
@@ -236,8 +257,10 @@ export function upsertRemoteShort({
       creator: creator || '',
       createdAt: createdAt || nowMs(),
       upvotes: 0,
+      saves: 0,
       comments: [],
       voters: [],
+      savers: [],
       cid,
       ...(typeof durationSeconds === 'number' && durationSeconds > 0 ? { durationSeconds } : {}),
     };
@@ -276,6 +299,15 @@ export function resetAllUpvoteCounts() {
   write(state);
 }
 
+export function resetAllSaveCounts() {
+  const state = read();
+  for (const short of state.shorts) {
+    short.savers = [];
+    short.saves = 0;
+  }
+  write(state);
+}
+
 export function upsertRemoteUpvote({ shortCid, voter }) {
   if (!shortCid || !voter) return null;
   const state = read();
@@ -286,6 +318,20 @@ export function upsertRemoteUpvote({ shortCid, voter }) {
     short.voters.push(voter);
   }
   short.upvotes = short.voters.length;
+  write(state);
+  return short;
+}
+
+export function upsertRemoteSave({ shortCid, saver }) {
+  if (!shortCid || !saver) return null;
+  const state = read();
+  const short = findShort(state, { cid: shortCid });
+  if (!short) return null;
+  short.savers = short.savers || [];
+  if (!short.savers.some((v) => v.toLowerCase() === saver.toLowerCase())) {
+    short.savers.push(saver);
+  }
+  short.saves = short.savers.length;
   write(state);
   return short;
 }

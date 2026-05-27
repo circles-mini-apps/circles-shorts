@@ -6,12 +6,14 @@ import {
   comment as commentAction,
   flagShort,
   publishShort,
+  save as saveAction,
   upvote as upvoteAction,
   voteModeration,
 } from './actions.js';
 import { formatPublishPriceLabel, PRAISE_KARMA_TIP, STRIKE_KARMA_TIP, publishPriceHint } from '../data/reputation.js';
 import { isDemoMode } from '../chain/circlesTransfer.js';
 import { allKnownCategories, genreDescription, submittedGenresWithCounts } from '../data/categories.js';
+import { computeLeaderboard, formatLeaderboardCrc, sortLeaderboardRows } from '../data/leaderboard.js';
 import { FLAG_CATEGORIES, flagCategoryLabel } from '../data/flagReasons.js';
 import {
   MIN_MODERATION_VOTES,
@@ -23,7 +25,7 @@ import {
   moderationSnapshot,
 } from '../data/moderation.js';
 import { ensureProfilesLoaded, profileFor, profileNameFor } from '../data/profiles.js';
-import { getShort } from '../data/storage.js';
+import { getShort, isSavedBy } from '../data/storage.js';
 import {
   durationBoundsForShorts,
   getShortDurationSeconds,
@@ -41,11 +43,13 @@ import {
   setSort,
   setSortOpen,
   setFlagFormOpen,
+  setLeaderboardSort,
   setProfileTab,
   setSearch,
   setSearchOpen,
   setStatus,
   setView,
+  goBack,
   state,
   subscribe,
   subscribeStatus,
@@ -64,15 +68,83 @@ import { formatDuration } from '../utils/duration.js';
 import { limits } from '../utils/validation.js';
 
 const FEEDBACK_URL = 'https://tally.so/r/xXlMNG';
+const UPLOADED_ICON = '⬆️';
+
+const LEADERBOARD_COLUMNS = [
+  {
+    key: 'earnedCrc',
+    icon: '🤑',
+    title: 'CRC earned',
+    rankingLabel: 'Earnings',
+    description: 'CRC received from upvotes and comments on their shorts',
+  },
+  {
+    key: 'spentCrc',
+    icon: '💸',
+    title: 'CRC spent',
+    rankingLabel: 'Spending',
+    description: 'CRC paid to publish, upvote, comment, and flag',
+  },
+  {
+    key: 'uploaded',
+    icon: UPLOADED_ICON,
+    title: 'Uploaded',
+    rankingLabel: 'Upload',
+    description: 'Shorts this user has published',
+  },
+  {
+    key: 'liked',
+    icon: '👍',
+    title: 'Upvoted',
+    rankingLabel: 'Upvote',
+    description: 'Upvotes this user gave to other creators\' shorts',
+  },
+  {
+    key: 'saved',
+    icon: '💾',
+    title: 'Saved',
+    rankingLabel: 'Saved',
+    description: 'Shorts this user bookmarked for free',
+  },
+  {
+    key: 'commented',
+    icon: '💬',
+    title: 'Commented',
+    rankingLabel: 'Comments',
+    description: 'Comments this user posted on shorts',
+  },
+];
+
+function leaderboardPageTitle(sortKey) {
+  const col = LEADERBOARD_COLUMNS.find((c) => c.key === sortKey) || LEADERBOARD_COLUMNS[0];
+  return {
+    icon: col.icon,
+    label: `${col.rankingLabel} Ranking`,
+  };
+}
+
+function leaderboardStatHtml(row, col) {
+  if (col.key === 'spentCrc' || col.key === 'earnedCrc') {
+    return `<span class="leaderboard-stat leaderboard-stat--crc" title="${escapeHtml(col.title)}">${formatLeaderboardCrc(row[col.key])} CRC</span>`;
+  }
+  return `<span class="leaderboard-stat">${row[col.key]}</span>`;
+}
+
+const SORT_PREFIX = '🔝';
 
 const SORT_OPTIONS = [
-  { value: 'recent', label: 'Most recent', icon: '🕒' },
+  { value: 'recent', label: 'Most recent', icon: '🕑' },
   { value: 'top', label: 'Most upvotes', icon: '👍' },
+  { value: 'saved', label: 'Most saved', icon: '💾' },
   { value: 'comments', label: 'Most comments', icon: '💬' },
 ];
 
 function sortOptionLabel(value) {
   return SORT_OPTIONS.find((o) => o.value === value)?.label || 'Sort';
+}
+
+function sortOptionIcon(value) {
+  return SORT_OPTIONS.find((o) => o.value === value)?.icon || '🕑';
 }
 
 function activeProfileAddress() {
@@ -89,10 +161,6 @@ function userProfileLinkHtml(address, label) {
   if (!address) return escapeHtml(label || '');
   const display = label || profileNameFor(address) || shortAddress(address);
   return `<button type="button" class="profile-link" data-action="go-user-profile" data-address="${escapeHtml(address)}" title="${escapeHtml(address)}">${escapeHtml(display)}</button>`;
-}
-
-function sortOptionIcon(value) {
-  return SORT_OPTIONS.find((o) => o.value === value)?.icon || '⇅';
 }
 
 function myPublishPrice() {
@@ -341,6 +409,8 @@ function visibleAddresses() {
     const addr = activeProfileAddress();
     if (addr) out.add(addr);
     for (const s of profileShorts()) out.add(s.creator);
+  } else if (state.view === 'leaderboard') {
+    for (const row of computeLeaderboard(state.shorts)) out.add(row.address);
   }
   return Array.from(out);
 }
@@ -426,8 +496,17 @@ function rerender() {
     ensureProfilesLoaded(addrs);
   }
 
-  if (navigatedToDetail) {
+  if (navigatedToDetail || state.scrollProfileToTop) {
+    state.scrollProfileToTop = false;
     window.scrollTo(0, 0);
+  } else if (state.scrollRestoreY != null) {
+    const y = state.scrollRestoreY;
+    state.scrollRestoreY = null;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.scrollTo(0, y);
+      });
+    });
   } else if (state.view === 'list' && state.listScrollY != null) {
     const y = state.listScrollY;
     state.listScrollY = null;
@@ -643,7 +722,8 @@ function renderSortDropdown() {
         data-sort="${opt.value}"
       >
         <span class="dd-check" aria-hidden="true">${state.sort === opt.value ? '✓' : ''}</span>
-        <span class="dd-item-label">${opt.icon} ${escapeHtml(opt.label)}</span>
+        <span class="dd-item-icon" aria-hidden="true">${opt.icon}</span>
+        <span class="dd-item-label">${escapeHtml(opt.label)}</span>
       </button>
     `,
   ).join('');
@@ -846,39 +926,48 @@ function videoEmbedUrl(rawUrl) {
   return null;
 }
 
-function filterShorts() {
+function applyShortFilters(list, { search = true } = {}) {
   const q = state.search.trim().toLowerCase();
   const cats = state.filterCategories.map((c) => c.toLowerCase());
-  let list = [...state.shorts];
-  if (state.view === 'list') {
-    list = list.filter((s) => s.moderation?.status !== 'violated');
+  let out = [...list];
+  if (search && q) {
+    out = out.filter((s) => s.title.toLowerCase().includes(q));
   }
-  if (q) list = list.filter((s) => s.title.toLowerCase().includes(q));
   if (cats.length) {
-    list = list.filter((s) => {
+    out = out.filter((s) => {
       const shortCats = (s.categories || []).map((x) => x.toLowerCase());
       return cats.every((c) => shortCats.includes(c));
     });
   }
   const durationRange = state.durationFilterRange;
   if (durationRange) {
-    list = list.filter((s) => {
+    out = out.filter((s) => {
       const d = getShortDurationSeconds(s, state.videoDurations);
       if (d == null) return false;
       return d >= durationRange.min && d <= durationRange.max;
     });
   }
   if (state.sort === 'top') {
-    list.sort((a, b) => (b.upvotes || 0) - (a.upvotes || 0) || b.createdAt - a.createdAt);
+    out.sort((a, b) => (b.upvotes || 0) - (a.upvotes || 0) || b.createdAt - a.createdAt);
+  } else if (state.sort === 'saved') {
+    out.sort((a, b) => (b.saves || 0) - (a.saves || 0) || b.createdAt - a.createdAt);
   } else if (state.sort === 'comments') {
-    list.sort(
+    out.sort(
       (a, b) =>
         (b.comments?.length || 0) - (a.comments?.length || 0) || b.createdAt - a.createdAt,
     );
   } else {
-    list.sort((a, b) => b.createdAt - a.createdAt);
+    out.sort((a, b) => b.createdAt - a.createdAt);
   }
-  return list;
+  return out;
+}
+
+function filterShorts() {
+  let list = [...state.shorts];
+  if (state.view === 'list') {
+    list = list.filter((s) => s.moderation?.status !== 'violated');
+  }
+  return applyShortFilters(list);
 }
 
 function renderCardFlagBtn(s, { underReview, isOwn, violated, onDetail = false }) {
@@ -921,7 +1010,9 @@ function shortsForDurationBounds() {
 }
 
 function durationFilterBounds() {
-  return durationBoundsForShorts(shortsForDurationBounds(), state.videoDurations);
+  const shorts =
+    state.view === 'profile' ? profileShortsBase() : shortsForDurationBounds();
+  return durationBoundsForShorts(shorts, state.videoDurations);
 }
 
 function isDurationFilterActive(bounds) {
@@ -1011,6 +1102,29 @@ function shortTitleWithDurationHtml(s) {
   return `${escapeHtml(s.title)}${durationHtml}`;
 }
 
+function saveButtonHtml(s, { action = 'card-save' } = {}) {
+  const saved = isSavedBy(s, state.connectedAddress);
+  const isOwn =
+    state.connectedAddress && s.creator.toLowerCase() === state.connectedAddress.toLowerCase();
+  const saveTitle = !state.connectedAddress
+    ? 'Connect wallet to save'
+    : saved
+      ? 'Saved'
+      : isOwn
+        ? 'Save your short for free'
+        : 'Save for free';
+  return `
+    <button
+      type="button"
+      class="btn btn--icon${saved ? ' btn--saved' : ''}"
+      data-action="${action}"
+      data-id="${escapeHtml(s.id)}"
+      ${!state.connectedAddress || saved ? 'disabled' : ''}
+      title="${escapeHtml(saveTitle)}"
+    >💾 <span class="count">${s.saves || 0}</span></button>
+  `;
+}
+
 function shortCard(s) {
   const cats = (s.categories || [])
     .map((c) => `<span class="chip chip--sm">${escapeHtml(c)}</span>`)
@@ -1056,6 +1170,7 @@ function shortCard(s) {
             ${isOwn || violated ? 'disabled' : ''}
             title="${escapeHtml(upvoteTitle)}"
           >👍 <span class="count">${s.upvotes || 0}</span></button>
+          ${saveButtonHtml(s)}
           <button
             type="button"
             class="btn btn--icon"
@@ -1069,37 +1184,39 @@ function shortCard(s) {
   `;
 }
 
-function listView() {
-  const shorts = filterShorts();
+function profileShortsBase() {
+  const me = activeProfileAddress().toLowerCase();
+  if (!me) return [];
+  const all = state.shorts;
+  if (state.profileTab === 'published') {
+    return all.filter((s) => s.creator?.toLowerCase() === me);
+  }
+  if (state.profileTab === 'upvoted') {
+    return all.filter(
+      (s) =>
+        s.creator?.toLowerCase() !== me &&
+        (s.voters || []).some((v) => v?.toLowerCase() === me),
+    );
+  }
+  if (state.profileTab === 'saved') {
+    return all.filter((s) => (s.savers || []).some((v) => v?.toLowerCase() === me));
+  }
+  return all.filter((s) => (s.comments || []).some((c) => c.by?.toLowerCase() === me));
+}
+
+function profileShorts() {
+  return applyShortFilters(profileShortsBase(), { search: false });
+}
+
+function renderBrowseControls({ genreShorts, durationShorts, showSearch = false, publishTitle = '' }) {
   const filterCount = state.filterCategories.length;
   const searchActive = Boolean(state.search.trim());
   const sortLabel = sortOptionLabel(state.sort);
   const sortIcon = sortOptionIcon(state.sort);
-  const publishTitle = (() => {
-    const info = myPublishPrice();
-    if (!info) return `Publish a new short (${PRICE_PUBLISH_CRC} CRC)`;
-    return `Publish a new short (${formatPublishPriceLabel(info)})`;
-  })();
-
-  const feedSyncing = state.feedLoading;
-  const feedError = state.feedError;
-  const emptyMessage = feedSyncing
-    ? 'Loading shorts from IPFS…'
-    : state.shorts.length === 0
-      ? 'Publish the first one.'
-      : 'Try clearing filters.';
-  const empty =
-    shorts.length === 0
-      ? `<p class="empty">${feedSyncing ? '' : 'No shorts match. '}${escapeHtml(emptyMessage)}</p>`
-      : '';
-  const feedBanner = feedError
-    ? `<div class="banner banner--error" role="status">Couldn't sync remote feed: ${escapeHtml(feedError)}</div>`
-    : '';
-
-  const genreRows = submittedGenresWithCounts(state.shorts);
+  const genreRows = submittedGenresWithCounts(genreShorts);
   const filterGenres = genreRows.map((r) => r.genre);
   const genreCounts = Object.fromEntries(genreRows.map((r) => [r.genre, r.count]));
-  const durationBounds = durationFilterBounds();
+  const durationBounds = durationBoundsForShorts(durationShorts, state.videoDurations);
   const durationFilterActive = isDurationFilterActive(durationBounds);
   const filterDropdown = state.filterOpen
     ? renderDropdown({
@@ -1119,8 +1236,9 @@ function listView() {
     : '';
   const sortDropdown = state.sortOpen ? renderSortDropdown() : '';
 
-  const searchBar = state.searchOpen
-    ? `
+  const searchBar =
+    showSearch && state.searchOpen
+      ? `
       <div class="search-row">
         <input
           class="input"
@@ -1138,17 +1256,21 @@ function listView() {
         }
       </div>
     `
-    : '';
+      : '';
 
   return `
     <section class="toolbar toolbar--icons">
-      <button
+      ${
+        showSearch
+          ? `<button
         class="btn btn--icon ${state.searchOpen || searchActive ? 'btn--active' : ''}"
         type="button"
         data-action="toggle-search"
         title="Search by title"
         aria-label="Search"
-      >🔍</button>
+      >🔍</button>`
+          : ''
+      }
       <button
         class="btn btn--icon ${state.filterOpen || filterCount ? 'btn--active' : ''}"
         type="button"
@@ -1170,8 +1292,17 @@ function listView() {
         data-action="toggle-sort-open"
         title="Sort feed"
         aria-label="Sort: ${escapeHtml(sortLabel)}"
-      ><span class="sort-mode-icon" aria-hidden="true">${sortIcon}</span><span class="sort-label toolbar-text">${escapeHtml(sortLabel)}</span></button>
-      <div class="toolbar-spacer"></div>
+      ><span class="sort-prefix" aria-hidden="true">${SORT_PREFIX}</span><span class="sort-mode-icon" aria-hidden="true">${sortIcon}</span><span class="sort-label toolbar-text">${escapeHtml(sortLabel)}</span></button>
+      ${
+        showSearch
+          ? `<div class="toolbar-spacer"></div>
+      <button
+        class="btn btn--ghost btn--round"
+        type="button"
+        data-action="go-leaderboard"
+        title="User ranking"
+        aria-label="User ranking"
+      >🏆</button>
       <button
         class="btn btn--ghost btn--round"
         type="button"
@@ -1183,9 +1314,11 @@ function listView() {
         class="btn btn--primary btn--round"
         type="button"
         data-action="go-create"
-        title="${escapeHtml(publishTitle)}"
+        title="${escapeHtml(publishTitle || 'Publish a new short')}"
         aria-label="New short"
-      >+</button>
+      >+</button>`
+          : ''
+      }
     </section>
 
     ${searchBar}
@@ -1196,6 +1329,41 @@ function listView() {
       ${durationDropdown}
       ${sortDropdown}
     </section>
+  `;
+}
+
+function listView() {
+  const shorts = filterShorts();
+  const publishTitle = (() => {
+    const info = myPublishPrice();
+    if (!info) return `Publish a new short (${PRICE_PUBLISH_CRC} CRC)`;
+    return `Publish a new short (${formatPublishPriceLabel(info)})`;
+  })();
+
+  const feedSyncing = state.feedLoading;
+  const feedError = state.feedError;
+  const emptyMessage = feedSyncing
+    ? 'Loading shorts from IPFS…'
+    : state.shorts.length === 0
+      ? 'Publish the first one.'
+      : 'Try clearing filters.';
+  const empty =
+    shorts.length === 0
+      ? `<p class="empty">${feedSyncing ? '' : 'No shorts match. '}${escapeHtml(emptyMessage)}</p>`
+      : '';
+  const feedBanner = feedError
+    ? `<div class="banner banner--error" role="status">Couldn't sync remote feed: ${escapeHtml(feedError)}</div>`
+    : '';
+
+  const browseControls = renderBrowseControls({
+    genreShorts: state.shorts,
+    durationShorts: shortsForDurationBounds(),
+    showSearch: true,
+    publishTitle,
+  });
+
+  return `
+    ${browseControls}
 
     ${feedBanner}
 
@@ -1285,39 +1453,98 @@ function createView() {
   `;
 }
 
-function profileShorts() {
-  const me = activeProfileAddress().toLowerCase();
-  if (!me) return [];
-  const all = state.shorts;
-  if (state.profileTab === 'published') {
-    return all
-      .filter((s) => s.creator?.toLowerCase() === me)
-      .sort((a, b) => b.createdAt - a.createdAt);
+function leaderboardUserAvatar(address) {
+  const me = profileFor(address);
+  const initial = ((me?.name || address).trim().charAt(0) || '?').toUpperCase();
+  if (me?.imageUrl) {
+    return `<img class="avatar avatar--xs leaderboard-avatar" src="${escapeHtml(me.imageUrl)}" alt="" />`;
   }
-  if (state.profileTab === 'upvoted') {
-    return all
-      .filter((s) =>
-        s.creator?.toLowerCase() !== me &&
-        (s.voters || []).some((v) => v?.toLowerCase() === me),
-      )
-      .sort((a, b) => b.createdAt - a.createdAt);
-  }
-  // commented
-  return all
-    .filter((s) =>
-      (s.comments || []).some((c) => c.by?.toLowerCase() === me),
-    )
-    .sort((a, b) => b.createdAt - a.createdAt);
+  return `<span class="avatar avatar--xs avatar--placeholder leaderboard-avatar" aria-hidden="true">${escapeHtml(initial)}</span>`;
+}
+
+function leaderboardView() {
+  const sortKey = state.leaderboardSort;
+  const rows = sortLeaderboardRows(computeLeaderboard(state.shorts), sortKey);
+  const connected = state.connectedAddress?.toLowerCase() || null;
+
+  const pageTitle = leaderboardPageTitle(sortKey);
+
+  const headerStats = LEADERBOARD_COLUMNS.map(
+    (col) => `
+      <button
+        type="button"
+        class="leaderboard-head-stat leaderboard-head-sort${sortKey === col.key ? ' leaderboard-head-sort--on' : ''}"
+        data-action="leaderboard-sort"
+        data-sort="${col.key}"
+        title="${escapeHtml(col.description)}"
+        aria-label="Sort by ${escapeHtml(col.title)}"
+        aria-pressed="${sortKey === col.key}"
+      >${col.icon}</button>
+    `,
+  ).join('');
+
+  const header = `
+    <div class="leaderboard-head">
+      <span class="leaderboard-head-rank">#</span>
+      <span class="leaderboard-head-avatar" aria-hidden="true"></span>
+      <span class="leaderboard-head-user">User</span>
+      ${headerStats}
+    </div>
+  `;
+
+  const list =
+    rows.length === 0
+      ? '<p class="empty">No activity yet. Publish, upvote, save, or comment to appear here.</p>'
+      : rows
+          .map((row, i) => {
+            const rank = i + 1;
+            const name = profileNameFor(row.address) || shortAddress(row.address);
+            const isMe = connected && row.address === connected;
+            return `
+              <div class="leaderboard-row${isMe ? ' leaderboard-row--me' : ''}">
+                <span class="leaderboard-rank">${rank}</span>
+                <button
+                  type="button"
+                  class="leaderboard-avatar-btn"
+                  data-action="go-user-profile"
+                  data-address="${escapeHtml(row.address)}"
+                  title="View profile"
+                  aria-label="View ${escapeHtml(name)} profile"
+                >${leaderboardUserAvatar(row.address)}</button>
+                <button
+                  type="button"
+                  class="profile-link leaderboard-name"
+                  data-action="go-user-profile"
+                  data-address="${escapeHtml(row.address)}"
+                  title="${escapeHtml(row.address)}"
+                >${escapeHtml(name)}</button>
+                ${LEADERBOARD_COLUMNS.map((col) => leaderboardStatHtml(row, col)).join('')}
+              </div>
+            `;
+          })
+          .join('');
+
+  return `
+    <button class="btn btn--ghost back" type="button" data-action="go-back">← Back</button>
+    <section class="card leaderboard-card">
+      <h2 class="leaderboard-title"><span class="leaderboard-title-icon" aria-hidden="true">🏆</span><span class="leaderboard-title-icon" aria-hidden="true">${pageTitle.icon}</span> ${escapeHtml(pageTitle.label)}</h2>
+      ${
+        rows.length
+          ? `<div class="leaderboard-table-wrap">${header}<div class="leaderboard-list">${list}</div></div>`
+          : `<div class="leaderboard-list">${list}</div>`
+      }
+    </section>
+  `;
 }
 
 function profileView() {
   const address = activeProfileAddress();
   if (!address) {
     return `
-      <button class="btn btn--ghost back" type="button" data-action="go-list">← Back</button>
+      <button class="btn btn--ghost back" type="button" data-action="go-back">← Back</button>
       <section class="card">
         <h2>My profile</h2>
-        <p class="muted">Open this app inside the Circles host and connect your wallet to see your published shorts, upvotes, and comments.</p>
+        <p class="muted">Open this app inside the Circles host and connect your wallet to see your published shorts, upvotes, comments, and saves.</p>
       </section>
     `;
   }
@@ -1346,6 +1573,9 @@ function profileView() {
     commented: all.filter((s) =>
       (s.comments || []).some((c) => c.by?.toLowerCase() === meLower),
     ).length,
+    saved: all.filter((s) =>
+      (s.savers || []).some((v) => v?.toLowerCase() === meLower),
+    ).length,
   };
 
   const flagWins = countFlaggerWins(address, all);
@@ -1372,49 +1602,72 @@ function profileView() {
   `;
 
   const tabs = [
-    { key: 'published', label: 'Published' },
-    { key: 'upvoted', label: 'Upvoted' },
-    { key: 'commented', label: 'Commented' },
+    { key: 'published', label: 'Published', icon: UPLOADED_ICON },
+    { key: 'upvoted', label: 'Upvoted', icon: '👍' },
+    { key: 'commented', label: 'Commented', icon: '💬' },
+    { key: 'saved', label: 'Saved', icon: '💾' },
   ];
 
+  const activeTab = tabs.find((t) => t.key === state.profileTab) || tabs[0];
+
   const tabBar = `
-    <nav class="tabs" role="tablist">
-      ${tabs
-        .map(
-          (t) => `
-            <button
-              role="tab"
-              class="tab ${state.profileTab === t.key ? 'tab--on' : ''}"
-              type="button"
-              data-action="profile-tab"
-              data-tab="${t.key}"
-              aria-selected="${state.profileTab === t.key}"
-            >
-              ${escapeHtml(t.label)}
-              <span class="tab-count">${counts[t.key]}</span>
-            </button>
-          `,
-        )
-        .join('')}
-    </nav>
+    <div class="profile-tabs">
+      <nav class="tabs" role="tablist">
+        ${tabs
+          .map(
+            (t) => `
+              <button
+                role="tab"
+                class="tab ${state.profileTab === t.key ? 'tab--on' : ''}"
+                type="button"
+                data-action="profile-tab"
+                data-tab="${t.key}"
+                aria-selected="${state.profileTab === t.key}"
+                title="${escapeHtml(t.label)}"
+                aria-label="${escapeHtml(t.label)} (${counts[t.key]})"
+              >
+                <span class="tab-icon" aria-hidden="true">${t.icon}</span>
+                <span class="tab-count">${counts[t.key]}</span>
+              </button>
+            `,
+          )
+          .join('')}
+      </nav>
+      <p class="profile-tab-title" role="tabpanel" aria-live="polite"><span class="profile-tab-title-icon" aria-hidden="true">${activeTab.icon}</span> ${escapeHtml(activeTab.label)}</p>
+    </div>
   `;
 
+  const baseItems = profileShortsBase();
   const items = profileShorts();
-  const emptyLabel = isOwn
+  const filterCount = state.filterCategories.length;
+  const durationFilterActive = isDurationFilterActive(durationFilterBounds());
+  const hasActiveFilters = filterCount > 0 || durationFilterActive;
+  const tabEmptyLabel = isOwn
     ? {
         published: 'You haven\'t published any shorts yet. Tap + to publish your first one.',
         upvoted: 'You haven\'t upvoted any shorts yet.',
         commented: 'You haven\'t commented on any shorts yet.',
+        saved: 'You haven\'t saved any shorts yet.',
       }[state.profileTab]
     : {
         published: 'No published shorts yet.',
         upvoted: 'No upvoted shorts yet.',
         commented: 'No commented shorts yet.',
+        saved: 'No saved shorts yet.',
       }[state.profileTab];
+  const emptyLabel =
+    items.length === 0 && hasActiveFilters && baseItems.length > 0
+      ? 'No shorts match. Try clearing filters.'
+      : tabEmptyLabel;
   const empty = items.length === 0 ? `<p class="empty">${escapeHtml(emptyLabel)}</p>` : '';
+  const browseControls = renderBrowseControls({
+    genreShorts: baseItems,
+    durationShorts: baseItems,
+    showSearch: false,
+  });
 
   return `
-    <button class="btn btn--ghost back" type="button" data-action="go-list">← Back</button>
+    <button class="btn btn--ghost back" type="button" data-action="go-back">← Back</button>
     <section class="card profile-header">
       ${copyBtn}
       ${avatar}
@@ -1425,6 +1678,7 @@ function profileView() {
       </div>
     </section>
     ${tabBar}
+    ${browseControls}
     <section class="list">
       ${renderShortList(items, { emptyHtml: empty })}
     </section>
@@ -1435,7 +1689,7 @@ function detailView() {
   const s = getShort(state.selectedShortId);
   if (!s) {
     return `
-      <button class="btn btn--ghost back" type="button" data-action="go-list">← Back</button>
+      <button class="btn btn--ghost back" type="button" data-action="go-back">← Back</button>
       <p class="empty">Short not found.</p>
     `;
   }
@@ -1490,6 +1744,21 @@ function detailView() {
           data-action="upvote"
           ${isOwn ? 'disabled title="You cannot upvote your own short"' : ''}
         >👍 Upvote ${s.upvotes || 0} · ${PRICE_INTERACT_CRC} CRC</button>
+        <button
+          class="btn${isSavedBy(s, state.connectedAddress) ? ' btn--saved' : ''}"
+          type="button"
+          data-action="save"
+          ${!state.connectedAddress || isSavedBy(s, state.connectedAddress) ? 'disabled' : ''}
+          title="${escapeHtml(
+            !state.connectedAddress
+              ? 'Connect wallet to save'
+              : isSavedBy(s, state.connectedAddress)
+                ? 'Saved'
+                : isOwn
+                  ? 'Save your short for free'
+                  : 'Save for free',
+          )}"
+        >💾 Save ${s.saves || 0}</button>
       </div>`
       }
     </article>
@@ -1528,6 +1797,7 @@ function renderApp() {
   if (state.view === 'create') view = createView();
   else if (state.view === 'detail') view = detailView();
   else if (state.view === 'profile') view = profileView();
+  else if (state.view === 'leaderboard') view = leaderboardView();
   else view = listView();
   return `
     ${header()}
@@ -1543,8 +1813,21 @@ function bindEvents() {
   app.querySelectorAll('[data-action="go-list"]').forEach((el) =>
     el.addEventListener('click', () => setView('list')),
   );
+  app.querySelectorAll('[data-action="go-back"]').forEach((el) =>
+    el.addEventListener('click', () => goBack()),
+  );
   app.querySelectorAll('[data-action="go-create"]').forEach((el) =>
     el.addEventListener('click', () => setView('create')),
+  );
+  app.querySelectorAll('[data-action="go-leaderboard"]').forEach((el) =>
+    el.addEventListener('click', () => setView('leaderboard')),
+  );
+  app.querySelectorAll('[data-action="leaderboard-sort"]').forEach((el) =>
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const sort = e.currentTarget.dataset.sort;
+      if (sort) setLeaderboardSort(sort);
+    }),
   );
   app.querySelectorAll('[data-action="go-profile"]').forEach((el) =>
     el.addEventListener('click', () => {
@@ -1834,6 +2117,22 @@ function bindEvents() {
       upvoteAction(id).catch(() => {});
     }),
   );
+  app.querySelectorAll('[data-action="card-save"]').forEach((el) =>
+    el.addEventListener('click', (e) => {
+      const id = e.currentTarget.dataset.id;
+      if (!id) return;
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      saveAction(id)
+        .catch(() => {})
+        .finally(() => {
+          const short = getShort(id);
+          if (short && !isSavedBy(short, state.connectedAddress)) {
+            btn.disabled = false;
+          }
+        });
+    }),
+  );
   app.querySelectorAll('[data-action="card-comment"]').forEach((el) =>
     el.addEventListener('click', (e) => {
       const id = e.currentTarget.dataset.id;
@@ -1854,6 +2153,18 @@ function bindEvents() {
         .catch(() => {})
         .finally(() => {
           upvoteBtn.disabled = false;
+        });
+    });
+  }
+  const saveBtn = app.querySelector('[data-action="save"]');
+  if (saveBtn) {
+    saveBtn.addEventListener('click', () => {
+      if (!state.selectedShortId) return;
+      saveBtn.disabled = true;
+      saveAction(state.selectedShortId)
+        .catch(() => {})
+        .finally(() => {
+          saveBtn.disabled = false;
         });
     });
   }

@@ -6,6 +6,8 @@ import {
   commentShort,
   finalizeModerationIfReady,
   getShort,
+  isSavedBy,
+  saveShort,
   setModerationRulingCid,
   upvoteShort,
 } from '../data/storage.js';
@@ -273,6 +275,40 @@ export async function upvote(shortId) {
     upvoteShort(shortId, voter);
     refreshShorts();
     setStatus('success', 'Upvoted.');
+  } catch (err) {
+    setStatus('error', normalizeError(err));
+    throw err;
+  }
+}
+
+export async function save(shortId) {
+  try {
+    const saver = requireConnected();
+    const short = getShort(shortId);
+    if (!short) throw new Error('Short not found');
+    if (isSavedBy(short, saver)) {
+      setStatus('success', 'Already saved.');
+      return;
+    }
+
+    saveShort(shortId, saver);
+
+    const savePayload = {
+      kind: 'circles-shorts:save',
+      v: 1,
+      shortCid: short.cid || null,
+      saver,
+      createdAt: Date.now(),
+    };
+    if (short.cid) {
+      await pinIfEnabled(savePayload, {
+        name: `save:${short.cid}`,
+        keyvalues: { kind: 'save', shortCid: short.cid, saver: saver.toLowerCase() },
+      });
+    }
+
+    refreshShorts();
+    setStatus('success', 'Saved.');
   } catch (err) {
     setStatus('error', normalizeError(err));
     throw err;

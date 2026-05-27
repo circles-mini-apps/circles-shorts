@@ -19,6 +19,8 @@ import {
   upsertRemoteShort,
   upsertRemoteUpvote,
   resetAllUpvoteCounts,
+  resetAllSaveCounts,
+  upsertRemoteSave,
   upsertRemoteFlag,
   upsertRemoteModVote,
   upsertRemoteRuling,
@@ -58,6 +60,10 @@ function isUpvoteContent(obj) {
   return obj && obj.kind === 'circles-shorts:upvote' && typeof obj.voter === 'string';
 }
 
+function isSaveContent(obj) {
+  return obj && obj.kind === 'circles-shorts:save' && typeof obj.saver === 'string';
+}
+
 function isFlagContent(obj) {
   return obj && obj.kind === 'circles-shorts:flag' && typeof obj.flagger === 'string';
 }
@@ -78,7 +84,7 @@ function isRulingContent(obj) {
  */
 export async function refreshFeedFromRemote() {
   if (!isPinningEnabled()) {
-    return { shorts: 0, comments: 0, upvotes: 0, flags: 0, modVotes: 0, rulings: 0, skipped: 'no-pinata' };
+    return { shorts: 0, comments: 0, upvotes: 0, saves: 0, flags: 0, modVotes: 0, rulings: 0, skipped: 'no-pinata' };
   }
 
   // 1. Discover all shorts.
@@ -105,9 +111,10 @@ export async function refreshFeedFromRemote() {
   }
 
   // 2. Discover comments, upvotes, flags, moderation votes, rulings.
-  const [commentPins, upvotePins, flagPins, modVotePins, rulingPins] = await Promise.all([
+  const [commentPins, upvotePins, savePins, flagPins, modVotePins, rulingPins] = await Promise.all([
     listPinnedCids({ keyvalues: { kind: 'comment' } }),
     listPinnedCids({ keyvalues: { kind: 'upvote' } }),
+    listPinnedCids({ keyvalues: { kind: 'save' } }),
     listPinnedCids({ keyvalues: { kind: 'flag' } }),
     listPinnedCids({ keyvalues: { kind: 'mod-vote' } }),
     listPinnedCids({ keyvalues: { kind: 'ruling' } }),
@@ -142,6 +149,16 @@ export async function refreshFeedFromRemote() {
     if (!shortCid || !voter) continue;
     const out = upsertRemoteUpvote({ shortCid, voter });
     if (out) upvotesAdded++;
+  }
+
+  let savesAdded = 0;
+  resetAllSaveCounts();
+  for (const pin of savePins) {
+    const shortCid = pin.keyvalues?.shortCid;
+    const saver = pin.keyvalues?.saver;
+    if (!shortCid || !saver) continue;
+    const out = upsertRemoteSave({ shortCid, saver });
+    if (out) savesAdded++;
   }
 
   const flagRecords = await pMap(flagPins, async (pin) => {
@@ -218,6 +235,7 @@ export async function refreshFeedFromRemote() {
     shorts: shortsAdded,
     comments: commentsAdded,
     upvotes: upvotesAdded,
+    saves: savesAdded,
     flags: flagsAdded,
     modVotes: modVotesAdded,
     rulings: rulingsAdded,
