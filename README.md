@@ -78,7 +78,7 @@ Restart `npm run dev`, then register the full `https://…trycloudflare.com` URL
 2. In a second terminal: `npm run tunnel` (or `cloudflared tunnel --url http://127.0.0.1:5173`).
 3. Update cloudflared: `brew upgrade cloudflared`.
 4. Retry in a few minutes, or disable VPN/ad blockers for `trycloudflare.com`.
-5. **Skip the tunnel** for host testing: use the deployed app at `https://shorts.pages.dev` instead of localhost.
+5. **Skip the tunnel** for host testing: use the deployed app at `https://circles-shorts.pages.dev` instead of localhost.
 
 **Alternatives if quick tunnels keep failing**
 
@@ -114,7 +114,7 @@ Deploy:
 npm run deploy
 ```
 
-This runs `npm run build` and then `wrangler pages deploy dist --project-name=shorts`. First run creates the project, subsequent runs push a new version. You get a stable URL like `https://shorts.pages.dev` plus a unique preview URL per deploy.
+This runs `npm run build` and then `wrangler pages deploy dist --project-name=circles-shorts`. Subsequent runs push a new version. Stable URL: `https://circles-shorts.pages.dev` (plus a unique preview URL per deploy). The slug `shorts.pages.dev` is taken by another project on Cloudflare.
 
 Paste the stable URL into the Circles miniapp host. The `VITE_PINATA_JWT` is inlined into the JS bundle at build time, so no extra Cloudflare env config is needed.
 

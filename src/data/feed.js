@@ -12,7 +12,7 @@
 import {
   fetchJsonByCid,
   isPinningEnabled,
-  listPinnedCidsAllNamespaces,
+  listAllAppPins,
 } from './ipfs.js';
 import { isContentKind } from '../app/config.js';
 import {
@@ -88,8 +88,11 @@ export async function refreshFeedFromRemote() {
     return { shorts: 0, comments: 0, upvotes: 0, saves: 0, flags: 0, modVotes: 0, rulings: 0, skipped: 'no-pinata' };
   }
 
-  // 1. Discover all shorts.
-  const shortPins = await listPinnedCidsAllNamespaces({ keyvalues: { kind: 'short' } });
+  // One pinList round-trip per namespace (current + legacy), filter kinds locally.
+  const allPins = await listAllAppPins();
+  const pinsByKind = (kind) => allPins.filter((p) => p.keyvalues?.kind === kind);
+
+  const shortPins = pinsByKind('short');
   const shortRecords = await pMap(shortPins, async (pin) => {
     const data = await fetchJsonByCid(pin.cid);
     return { pin, data };
@@ -111,15 +114,12 @@ export async function refreshFeedFromRemote() {
     shortsAdded++;
   }
 
-  // 2. Discover comments, upvotes, flags, moderation votes, rulings.
-  const [commentPins, upvotePins, savePins, flagPins, modVotePins, rulingPins] = await Promise.all([
-    listPinnedCidsAllNamespaces({ keyvalues: { kind: 'comment' } }),
-    listPinnedCidsAllNamespaces({ keyvalues: { kind: 'upvote' } }),
-    listPinnedCidsAllNamespaces({ keyvalues: { kind: 'save' } }),
-    listPinnedCidsAllNamespaces({ keyvalues: { kind: 'flag' } }),
-    listPinnedCidsAllNamespaces({ keyvalues: { kind: 'mod-vote' } }),
-    listPinnedCidsAllNamespaces({ keyvalues: { kind: 'ruling' } }),
-  ]);
+  const commentPins = pinsByKind('comment');
+  const upvotePins = pinsByKind('upvote');
+  const savePins = pinsByKind('save');
+  const flagPins = pinsByKind('flag');
+  const modVotePins = pinsByKind('mod-vote');
+  const rulingPins = pinsByKind('ruling');
 
   const commentRecords = await pMap(commentPins, async (pin) => {
     const data = await fetchJsonByCid(pin.cid);

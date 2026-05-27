@@ -9,8 +9,18 @@
  * Reads (`fetchJsonByCid`) work without a JWT — only writes/discovery are gated.
  */
 
-const PIN_ENDPOINT = 'https://api.pinata.cloud/pinning/pinJSONToIPFS';
-const PINLIST_ENDPOINT = 'https://api.pinata.cloud/data/pinList';
+/** Same-origin proxy in dev avoids CSP / connection limits when embedded in the Circles host. */
+function pinataBase() {
+  return import.meta.env.DEV ? '/api/pinata' : 'https://api.pinata.cloud';
+}
+
+function pinEndpoint() {
+  return `${pinataBase()}/pinning/pinJSONToIPFS`;
+}
+
+function pinListEndpoint() {
+  return `${pinataBase()}/data/pinList`;
+}
 
 import { APP_NAMESPACE, LEGACY_APP_NAMESPACE } from '../app/config.js';
 
@@ -54,7 +64,7 @@ export async function pinJson(content, { name = APP_NAMESPACE, keyvalues = {} } 
     pinataMetadata: { name, keyvalues: safeKeyvalues },
     pinataOptions: { cidVersion: 0 },
   };
-  const res = await fetch(PIN_ENDPOINT, {
+  const res = await fetchWithRetry(pinEndpoint(), {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -95,8 +105,8 @@ export async function listPinnedCids({ keyvalues = {}, limit = 1000, appNamespac
   const qvParts = Object.entries(tagged).map(
     ([k, v]) => `metadata[keyvalues][${k}]=${encodeURIComponent(JSON.stringify({ value: String(v), op: 'eq' }))}`,
   );
-  const url = `${PINLIST_ENDPOINT}?status=pinned&pageLimit=${limit}&includesCount=false&${qvParts.join('&')}`;
-  const res = await fetch(url, {
+  const url = `${pinListEndpoint()}?status=pinned&pageLimit=${limit}&includesCount=false&${qvParts.join('&')}`;
+  const res = await fetchWithRetry(url, {
     method: 'GET',
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -125,14 +135,45 @@ export async function listPinnedCidsAllNamespaces(options = {}) {
     listPinnedCids({ ...options, appNamespace: APP_NAMESPACE }),
     listPinnedCids({ ...options, appNamespace: LEGACY_APP_NAMESPACE }),
   ]);
+  return dedupePins([...current, ...legacy]);
+}
+
+/**
+ * One pinList call per namespace (2 total), then filter by `keyvalues.kind` locally.
+ * Avoids 14+ parallel pinList requests after the Shorts rename added legacy sync.
+ */
+export async function listAllAppPins({ limit = 1000 } = {}) {
+  const [current, legacy] = await Promise.all([
+    listPinnedCids({ limit, appNamespace: APP_NAMESPACE }),
+    listPinnedCids({ limit, appNamespace: LEGACY_APP_NAMESPACE }),
+  ]);
+  return dedupePins([...current, ...legacy]);
+}
+
+function dedupePins(pins) {
   const seen = new Set();
   const out = [];
-  for (const pin of [...current, ...legacy]) {
+  for (const pin of pins) {
     if (seen.has(pin.cid)) continue;
     seen.add(pin.cid);
     out.push(pin);
   }
   return out;
+}
+
+async function fetchWithRetry(url, options, retries = 2) {
+  let lastErr = null;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fetch(url, options);
+    } catch (err) {
+      lastErr = err;
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      }
+    }
+  }
+  throw lastErr || new Error('Network request failed');
 }
 
 const memoryCache = new Map();

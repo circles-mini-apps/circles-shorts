@@ -13,6 +13,13 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       strictPort: true,
       host: true,
+      proxy: {
+        '/api/pinata': {
+          target: 'https://api.pinata.cloud',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/api\/pinata/, ''),
+        },
+      },
       // Allow tunnel hostnames (ngrok, Cloudflare, etc.)
       allowedHosts: hmrHost ? [hmrHost, '.trycloudflare.com', '.ngrok-free.app', '.ngrok.io'] : true,
       ...(hmrHost

@@ -4,8 +4,8 @@ export const APP_NAME = '🩳 Shorts';
 /** Plain name for org registration and prose (no emoji). */
 export const APP_NAME_PLAIN = 'Shorts';
 
-/** URL / repo / Cloudflare project slug. */
-export const APP_SLUG = 'shorts';
+/** Cloudflare Pages project slug → https://circles-shorts.pages.dev */
+export const APP_SLUG = 'circles-shorts';
 
 /** Pinata keyvalues `app` tag for new pins. */
 export const APP_NAMESPACE = 'shorts';
