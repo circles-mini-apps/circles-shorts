@@ -1,3 +1,5 @@
+import { userFlagEntries, userFlaggedShortIds } from './userFlags.js';
+
 /** Minimum unique votes before a flag can be ruled. */
 export const MIN_MODERATION_VOTES = 5;
 
@@ -117,28 +119,90 @@ export function isShortUnderReview(short) {
  */
 export function countFlaggerWins(address, shorts) {
   if (!address) return 0;
-  const me = address.toLowerCase();
   let n = 0;
   for (const s of shorts) {
-    if (s.moderation?.status !== 'violated') continue;
-    const flagger = s.moderation?.resolvedFlagger || s.moderation?.activeFlag?.flagger;
-    if (flagger?.toLowerCase() === me) n++;
+    if (isFlaggerWin(s, address)) n++;
   }
   return n;
 }
 
 /**
- * Removed shorts on a creator's record (🚩 strikes).
+ * Removed shorts on a creator's record (❌ strikes).
  * @param {string | null | undefined} address
  * @param {import('./storage.js').ShortRecord[]} shorts
  */
 export function countCreatorViolations(address, shorts) {
   if (!address) return 0;
-  const me = address.toLowerCase();
   let n = 0;
   for (const s of shorts) {
-    if (s.moderation?.status !== 'violated') continue;
-    if (s.creator?.toLowerCase() === me) n++;
+    if (isCreatorStrike(s, address)) n++;
   }
   return n;
+}
+
+export function isCreatorStrike(short, address) {
+  if (!address || short.moderation?.status !== 'violated') return false;
+  return short.creator?.toLowerCase() === address.toLowerCase();
+}
+
+export function isFlaggerWin(short, address) {
+  if (!address || short.moderation?.status !== 'violated') return false;
+  const flagger = short.moderation?.resolvedFlagger || short.moderation?.activeFlag?.flagger;
+  return flagger?.toLowerCase() === address.toLowerCase();
+}
+
+/** Short this user flagged (active, cleared, or removed). */
+export function isFlaggedByUser(short, address) {
+  if (!address || !short) return false;
+  const me = address.toLowerCase();
+  for (const e of userFlagEntries(me)) {
+    if (e.shortId === short.id) return true;
+    if (short.cid && e.shortCid && e.shortCid === short.cid) return true;
+  }
+  const m = short.moderation;
+  if (!m) return false;
+  if (m.activeFlag?.flagger?.toLowerCase() === me) return true;
+  if (m.resolvedFlagger?.toLowerCase() === me) return true;
+  return false;
+}
+
+/** Creator's short that received a flag (active, cleared, or removed). */
+export function isFlaggedAsCreator(short, address) {
+  if (!address || !short) return false;
+  if (short.creator?.toLowerCase() !== address.toLowerCase()) return false;
+  const m = short.moderation;
+  if (!m) return false;
+  if (m.status === 'voting') return true;
+  if (m.status === 'cleared' || m.status === 'violated') {
+    return Boolean(m.resolvedFlagger || m.activeFlag || m.rulingCid || m.ruling);
+  }
+  return false;
+}
+
+/** Profile 🚩 tab: shorts you flagged or your uploads that were flagged. */
+export function isProfileFlagged(short, address) {
+  return isFlaggedByUser(short, address) || isFlaggedAsCreator(short, address);
+}
+
+export function countFlaggedByUser(address, shorts) {
+  if (!address) return 0;
+  const ids = userFlaggedShortIds(address);
+  if (ids.size > 0) {
+    const inFeed = shorts.filter((s) => ids.has(s.id)).length;
+    return inFeed > 0 ? inFeed : ids.size;
+  }
+  let n = 0;
+  for (const s of shorts) {
+    if (isFlaggedByUser(s, address)) n++;
+  }
+  return n;
+}
+
+export function countProfileFlagged(address, shorts) {
+  if (!address) return 0;
+  const seen = new Set();
+  for (const s of shorts) {
+    if (isProfileFlagged(s, address)) seen.add(s.id);
+  }
+  return seen.size;
 }

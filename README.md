@@ -150,7 +150,7 @@ scripts/
 
 | Variable | Purpose |
 |----------|---------|
-| `VITE_PINATA_JWT` | Pinata API JWT (scope: `pinJSONToIPFS`, `pinFileToIPFS`, `pinList`). Required for cross-user feed + deploy. |
+| `VITE_PINATA_JWT` | Pinata API JWT (scopes: `pinJSONToIPFS`, `pinList`, `unpin`; optional `pinFileToIPFS` for `deploy:pinata`). Required for cross-user feed. |
 | `VITE_PLATFORM_ORG_ADDRESS` | Circles **organisation** avatar that receives publish + flag fees. Inlined at build time. |
 | `VITE_IPFS_GATEWAY` | Optional dedicated Pinata gateway URL (faster reads). |
 | `VITE_HMR_HOST` | Tunnel hostname for HMR in the Circles host. |
@@ -162,6 +162,6 @@ scripts/
 
 The Pinata JWT ships to the browser, so anyone using the deployed app can use the quota. Mitigations:
 
-- Scope the key to `pinJSONToIPFS` + `pinFileToIPFS` + `pinList` only (no unpin).
+- Scope the key to `pinJSONToIPFS` + `pinList` + `unpin` (+ `pinFileToIPFS` only if you use `deploy:pinata`).
 - Set a tight monthly limit on the Pinata key.
 - For production: front Pinata with a Cloudflare Worker / Vercel Edge function holding the JWT server-side, and have the app POST to your worker instead.

@@ -1,9 +1,10 @@
 import { PUBLISH_BASE_CRC } from './reputation.js';
+import { countFlaggerWins } from './moderation.js';
 
 const INTERACT_CRC = 0.5;
 const FLAG_CRC = 0.5;
 
-/** @typedef {'total' | 'uploaded' | 'liked' | 'saved' | 'commented' | 'spentCrc' | 'earnedCrc'} LeaderboardSort */
+/** @typedef {'total' | 'uploaded' | 'liked' | 'saved' | 'commented' | 'spentCrc' | 'earnedCrc' | 'removed'} LeaderboardSort */
 
 function countFlagsByUser(address, shorts) {
   const me = address.toLowerCase();
@@ -103,6 +104,7 @@ export function computeLeaderboard(shorts) {
     .map(([address, row]) => {
       const spentCrc = crcSpentForUser(address, row, shorts);
       const earnedCrc = crcEarnedForUser(address, shorts);
+      const removed = countFlaggerWins(address, shorts);
       return {
         address,
         uploaded: row.uploaded,
@@ -111,10 +113,13 @@ export function computeLeaderboard(shorts) {
         commented: row.commented,
         spentCrc,
         earnedCrc,
+        removed,
         total: row.uploaded + row.liked + row.saved + row.commented,
       };
     })
-    .filter((row) => row.total > 0 || row.spentCrc > 0 || row.earnedCrc > 0);
+    .filter(
+      (row) => row.total > 0 || row.spentCrc > 0 || row.earnedCrc > 0 || row.removed > 0,
+    );
 }
 
 /** @param {ReturnType<typeof computeLeaderboard>} rows @param {LeaderboardSort} sortKey */

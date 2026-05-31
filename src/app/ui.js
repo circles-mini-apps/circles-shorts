@@ -4,11 +4,17 @@ import {
   PRICE_PUBLISH_CRC,
   getPublishPriceFor,
   comment as commentAction,
+  deleteComment as deleteCommentAction,
+  deleteUpload,
   flagShort,
   publishShort,
   save as saveAction,
+  unsave as unsaveAction,
+  updateUpload,
   upvote as upvoteAction,
+  unupvote as unupvoteAction,
   voteModeration,
+  withdrawFlag,
 } from './actions.js';
 import { formatPublishPriceLabel, PRAISE_KARMA_TIP, STRIKE_KARMA_TIP, publishPriceHint } from '../data/reputation.js';
 import { isDemoMode } from '../chain/circlesTransfer.js';
@@ -20,13 +26,23 @@ import {
   MIN_MODERATION_VOTES,
   MODERATION_DAYS,
   countCreatorViolations,
+  countProfileFlagged,
   countFlaggerWins,
+  isCreatorStrike,
+  isProfileFlagged,
+  isFlaggerWin,
   isShortViolated,
   isShortUnderReview,
   moderationSnapshot,
 } from '../data/moderation.js';
 import { ensureProfilesLoaded, profileFor, profileNameFor } from '../data/profiles.js';
-import { getShort, isSavedBy } from '../data/storage.js';
+import {
+  getUploadNotifications,
+  isNotificationRead,
+  markAllNotificationsRead,
+  markNotificationRead,
+} from '../data/notifications.js';
+import { getShort, hasUpvoted, isSavedBy } from '../data/storage.js';
 import {
   durationBoundsForShorts,
   getShortDurationSeconds,
@@ -45,6 +61,9 @@ import {
   setSortOpen,
   setFlagFormOpen,
   setLeaderboardSort,
+  setNotificationsOpen,
+  setPendingWithdrawFlag,
+  clearPendingWithdrawFlag,
   setProfileTab,
   setSearch,
   setSearchOpen,
@@ -114,6 +133,13 @@ const LEADERBOARD_COLUMNS = [
     rankingLabel: 'Comments',
     description: 'Comments this user posted on shorts',
   },
+  {
+    key: 'removed',
+    icon: '👮',
+    title: 'I removed',
+    rankingLabel: 'I removed',
+    description: 'Shorts this user flagged that were removed after moderation',
+  },
 ];
 
 function leaderboardPageTitle(sortKey) {
@@ -124,11 +150,46 @@ function leaderboardPageTitle(sortKey) {
   };
 }
 
-function leaderboardStatHtml(row, col) {
+function leaderboardStatHtml(row, col, sortKey) {
+  const sorted = col.key === sortKey ? ' leaderboard-stat--sorted' : '';
   if (col.key === 'spentCrc' || col.key === 'earnedCrc') {
-    return `<span class="leaderboard-stat leaderboard-stat--crc" title="${escapeHtml(col.title)}">${formatLeaderboardCrc(row[col.key])} CRC</span>`;
+    return `<span class="leaderboard-stat leaderboard-stat--crc${sorted}" title="${escapeHtml(col.title)}">${formatLeaderboardCrc(row[col.key])} CRC</span>`;
   }
-  return `<span class="leaderboard-stat">${row[col.key]}</span>`;
+  return `<span class="leaderboard-stat${sorted}">${row[col.key]}</span>`;
+}
+
+function leaderboardRowClass(isMe) {
+  return isMe ? 'leaderboard-row-shell leaderboard-row-shell--me' : 'leaderboard-row-shell';
+}
+
+/** Rank of the connected wallet for the current sort column (1-based). */
+function myLeaderboardRank(sortedRows, sortKey) {
+  if (!state.connectedAddress) return null;
+
+  const idx = sortedRows.findIndex((row) => isOwnProfileAddress(row.address));
+  if (idx >= 0) return idx + 1;
+
+  // Connected wallet with no leaderboard activity yet — rank last for this sort.
+  const me = state.connectedAddress.toLowerCase();
+  const withMe = sortLeaderboardRows(
+    [
+      ...sortedRows,
+      {
+        address: me,
+        uploaded: 0,
+        liked: 0,
+        saved: 0,
+        commented: 0,
+        spentCrc: 0,
+        earnedCrc: 0,
+        removed: 0,
+        total: 0,
+      },
+    ],
+    sortKey,
+  );
+  const idxWithMe = withMe.findIndex((row) => row.address?.toLowerCase() === me);
+  return idxWithMe >= 0 ? idxWithMe + 1 : null;
 }
 
 const SORT_PREFIX = '🔝';
@@ -266,10 +327,41 @@ function renderModerationPanel(s) {
   if (underReview && flag) {
     const flaggerName = profileNameFor(flag.flagger) || shortAddress(flag.flagger);
     const display = flagDisplay(flag);
+    const isFlagger = me && flag.flagger?.toLowerCase() === me;
     const userVote = (s.moderation?.votes || []).find(
       (v) => v.flagCid === flag.cid && v.voter?.toLowerCase() === me,
     );
     const canVote = me && !isOwn && !userVote;
+    const editedAfterFlag =
+      typeof s.editedAt === 'number' && s.editedAt > (flag.createdAt || 0);
+    const creatorBlock = isOwn
+      ? `
+        <div class="moderation-role-block moderation-role-block--creator">
+          <p class="muted">This short was flagged. Edit your upload to address the reported issue.</p>
+          <button class="btn btn--primary btn--sm" type="button" data-action="go-edit" data-id="${escapeHtml(s.id)}">Edit upload</button>
+        </div>
+      `
+      : '';
+    const flaggerBlock = isFlagger
+      ? `
+        <div class="moderation-role-block moderation-role-block--flagger">
+          ${
+            editedAfterFlag
+              ? `<p class="muted">The creator updated this upload ${escapeHtml(timeAgo(s.editedAt))} after your flag.</p>`
+              : '<p class="muted">The creator can edit their upload to fix the issue.</p>'
+          }
+          ${
+            state.pendingWithdrawFlagId === s.id
+              ? `<div class="actions-row moderation-withdraw-confirm">
+                  <button class="btn btn--primary btn--sm" type="button" data-action="confirm-withdraw-flag" data-id="${escapeHtml(s.id)}">Confirm withdraw</button>
+                  <button class="btn btn--ghost btn--sm" type="button" data-action="cancel-withdraw-flag">Cancel</button>
+                </div>
+                <p class="small muted">Withdraw only if the creator fixed the issue.</p>`
+              : `<button class="btn btn--ghost btn--sm" type="button" data-action="withdraw-flag" data-id="${escapeHtml(s.id)}">Withdraw flag</button>`
+          }
+        </div>
+      `
+      : '';
     return `
       <section class="card moderation moderation--open" data-flag-vote>
         <div class="moderation-head">
@@ -279,6 +371,8 @@ function renderModerationPanel(s) {
         <p class="moderation-reason-label">${display.label ? `<span class="chip chip--warn">${escapeHtml(display.label)}</span>` : ''}</p>
         <p class="moderation-reason">${escapeHtml(display.text)}</p>
         <p class="small muted">Flagged by ${escapeHtml(flaggerName)} · ${escapeHtml(timeAgo(flag.createdAt))}</p>
+        ${creatorBlock}
+        ${flaggerBlock}
         <div class="moderation-stats">
           <span>Violation: <strong>${snap.tally.violation}</strong></span>
           <span>Not violation: <strong>${snap.tally.clear}</strong></span>
@@ -295,8 +389,8 @@ function renderModerationPanel(s) {
               </div>`
             : userVote
               ? `<p class="muted">You voted: ${userVote.verdict === 'violation' ? 'Violation' : 'Not violation'}.</p>`
-              : isOwn
-                ? '<p class="muted">You cannot vote on a flag for your own short.</p>'
+              : isOwn || isFlagger
+                ? ''
                 : !me
                   ? '<p class="muted">Connect a wallet to vote.</p>'
                   : ''
@@ -605,6 +699,113 @@ function listShortCount() {
   return state.shorts.filter((s) => s.moderation?.status !== 'violated').length;
 }
 
+const NOTIFICATION_ICONS = {
+  upvote: '👍',
+  save: '💾',
+  comment: '💬',
+  flag: '🚩',
+  ruling: '⚖️',
+  'flag-edit': '✏️',
+};
+
+function notificationMessage(n) {
+  const title = n.shortTitle || 'your short';
+  const actor = n.actor ? profileNameFor(n.actor) || shortAddress(n.actor) : null;
+  switch (n.type) {
+    case 'upvote':
+      return `${actor || 'Someone'} upvoted “${title}”`;
+    case 'save':
+      return `${actor || 'Someone'} saved “${title}”`;
+    case 'comment':
+      return `${actor || 'Someone'} commented on “${title}”`;
+    case 'flag':
+      return actor ? `“${title}” was flagged by ${actor}` : `“${title}” was flagged for review`;
+    case 'ruling':
+      return n.meta?.verdict === 'violation'
+        ? `“${title}” was removed after moderation`
+        : `“${title}” was cleared after moderation`;
+    case 'flag-edit':
+      return actor
+        ? `${actor} updated “${title}” after your flag`
+        : `The creator updated “${title}” after your flag`;
+    default:
+      return `Activity on “${title}”`;
+  }
+}
+
+function notificationsPanelHtml() {
+  if (!state.connectedAddress) return '';
+  const { items, unreadCount } = getUploadNotifications(state.connectedAddress);
+  const open = state.notificationsOpen;
+  const badge =
+    unreadCount > 0
+      ? `<span class="notify-badge" aria-hidden="true">${unreadCount > 99 ? '99+' : unreadCount}</span>`
+      : '';
+  const list =
+    items.length === 0
+      ? '<p class="notify-empty muted">No notifications yet. You\'ll be notified about activity on your uploads and edits to shorts you flagged.</p>'
+      : `<ul class="notify-list">${items
+          .map((n) => {
+            const unread = !isNotificationRead(state.connectedAddress, n.id);
+            const preview =
+              n.type === 'comment' && n.meta?.commentPreview
+                ? `<span class="notify-preview">${escapeHtml(n.meta.commentPreview)}</span>`
+                : '';
+            return `
+              <li>
+                <button
+                  type="button"
+                  class="notify-item${unread ? ' notify-item--unread' : ''}"
+                  data-action="open-notification"
+                  data-id="${escapeHtml(n.id)}"
+                  data-short-id="${escapeHtml(n.shortId)}"
+                >
+                  <span class="notify-item-icon" aria-hidden="true">${NOTIFICATION_ICONS[n.type] || '🔔'}</span>
+                  <span class="notify-item-body">
+                    <span class="notify-item-text">${escapeHtml(notificationMessage(n))}</span>
+                    ${preview}
+                    <span class="notify-item-time muted">${escapeHtml(timeAgo(n.createdAt))}</span>
+                  </span>
+                </button>
+              </li>
+            `;
+          })
+          .join('')}</ul>`;
+  const markAll =
+    unreadCount > 0
+      ? `<button type="button" class="btn btn--ghost btn--sm notify-mark-all" data-action="mark-all-notifications-read">Mark all read</button>`
+      : '';
+
+  return `
+    <div class="notify-wrap">
+      <button
+        type="button"
+        class="notify-btn${open ? ' notify-btn--active' : ''}${unreadCount ? ' notify-btn--unread' : ''}"
+        data-action="toggle-notifications"
+        aria-label="Notifications${unreadCount ? `, ${unreadCount} unread` : ''}"
+        aria-expanded="${open}"
+        title="Notifications"
+      >
+        <span class="notify-bell" aria-hidden="true">🔔</span>
+        ${badge}
+      </button>
+      ${
+        open
+          ? `
+        <div class="notify-panel dropdown" id="notify-dd" role="dialog" aria-label="Notifications">
+          <div class="notify-panel-head">
+            <span class="notify-panel-title">Notifications</span>
+            ${markAll}
+          </div>
+          ${list}
+        </div>
+      `
+          : ''
+      }
+    </div>
+  `;
+}
+
 function header() {
   const n = listShortCount();
   const countLabel = `${n} short${n === 1 ? '' : 's'}`;
@@ -643,7 +844,7 @@ function header() {
         <span class="brand-meta muted">${escapeHtml(countLabel)}</span>
         ${demo}
       </div>
-      <div class="topbar-right">${walletBtn}</div>
+      <div class="topbar-right">${notificationsPanelHtml()}${walletBtn}</div>
     </header>
   `;
 }
@@ -781,7 +982,14 @@ function iframeHtml(src) {
   return `<iframe src="${escapeHtml(src)}" allow="${IFRAME_ALLOW}" allowfullscreen loading="lazy" title="Video player"></iframe>`;
 }
 
-function videoPlayerHtml({ embed, variant = 'sm', lazy = false, shortId = null, videoUrl = null }) {
+function videoPlayerHtml({
+  embed,
+  variant = 'sm',
+  lazy = false,
+  shortId = null,
+  videoUrl = null,
+  controlsExtra = '',
+}) {
   const variantClass = variant === 'bleed' ? 'player--bleed' : 'player--sm';
   const lazyClass = lazy ? ' lazy-player' : '';
   const lazyAttr = lazy ? ` data-embed="${escapeHtml(embed)}"` : '';
@@ -798,7 +1006,7 @@ function videoPlayerHtml({ embed, variant = 'sm', lazy = false, shortId = null, 
       <div class="player-media">${mediaContent}</div>
       <div class="player-controls">
         <button type="button" class="player-fs-btn" data-action="player-fullscreen" aria-label="Fullscreen" title="Fullscreen">⛶</button>
-        ${copyBtn}
+        ${copyBtn}${controlsExtra}
       </div>
     </div>
   `;
@@ -982,7 +1190,7 @@ function filterShorts() {
   return applyShortFilters(list);
 }
 
-function renderCardFlagBtn(s, { underReview, isOwn, violated, onDetail = false }) {
+function renderCardFlagBtn(s, { underReview, isOwn, violated, onDetail = false, inPlayer = false }) {
   const flagTitle = underReview
     ? 'Under moderation review — tap to vote'
     : isOwn
@@ -998,12 +1206,13 @@ function renderCardFlagBtn(s, { underReview, isOwn, violated, onDetail = false }
 
   const actionAttr = action ? `data-action="${action}"` : '';
   const disabled = violated || (isOwn && !underReview);
-  const flagClass = underReview ? ' card-flag-btn--active' : ' card-flag-btn--idle';
+  const baseClass = inPlayer ? 'player-flag-btn' : 'card-flag-btn';
+  const flagClass = underReview ? ` ${baseClass}--active` : ` ${baseClass}--idle`;
 
   return `
     <button
       type="button"
-      class="card-flag-btn${flagClass}"
+      class="${baseClass}${flagClass}"
       ${actionAttr}
       data-id="${escapeHtml(s.id)}"
       ${disabled ? 'disabled' : ''}
@@ -1121,7 +1330,7 @@ function saveButtonHtml(s, { action = 'card-save' } = {}) {
   const saveTitle = !state.connectedAddress
     ? 'Connect wallet to save'
     : saved
-      ? 'Saved'
+      ? 'Unsave (CRC not refunded)'
       : isOwn
         ? 'Save your short for free'
         : 'Save for free';
@@ -1131,9 +1340,47 @@ function saveButtonHtml(s, { action = 'card-save' } = {}) {
       class="btn btn--icon${saved ? ' btn--saved' : ''}"
       data-action="${action}"
       data-id="${escapeHtml(s.id)}"
-      ${!state.connectedAddress || saved ? 'disabled' : ''}
+      ${!state.connectedAddress ? 'disabled' : ''}
       title="${escapeHtml(saveTitle)}"
     >💾 <span class="count">${s.saves || 0}</span></button>
+  `;
+}
+
+function upvoteButtonHtml(s, { action = 'card-upvote' } = {}) {
+  const isOwn =
+    state.connectedAddress && s.creator.toLowerCase() === state.connectedAddress.toLowerCase();
+  const upvoted = hasUpvoted(s, state.connectedAddress);
+  const violated = isShortViolated(s);
+  const upvoteTitle = isOwn
+    ? 'You cannot upvote your own short'
+    : upvoted
+      ? 'Remove upvote (CRC not refunded)'
+      : `Pay ${PRICE_INTERACT_CRC} CRC to upvote`;
+  return `
+    <button
+      type="button"
+      class="btn btn--icon${upvoted ? ' btn--upvoted' : ''}"
+      data-action="${action}"
+      data-id="${escapeHtml(s.id)}"
+      ${isOwn || violated || !state.connectedAddress ? 'disabled' : ''}
+      title="${escapeHtml(upvoteTitle)}"
+    >👍 <span class="count">${s.upvotes || 0}</span></button>
+  `;
+}
+
+function shortCardActionsHtml(s) {
+  return `
+    <div class="card-actions">
+      ${upvoteButtonHtml(s)}
+      ${saveButtonHtml(s)}
+      <button
+        type="button"
+        class="btn btn--icon"
+        data-action="card-comment"
+        data-id="${escapeHtml(s.id)}"
+        title="Open comments"
+      >💬 <span class="count">${s.comments?.length || 0}</span></button>
+    </div>
   `;
 }
 
@@ -1142,59 +1389,59 @@ function shortCard(s) {
     .map((c) => `<span class="chip chip--sm">${escapeHtml(c)}</span>`)
     .join('');
   const embed = videoEmbedUrl(s.url);
+  const violated = isShortViolated(s);
+  const underReview = isShortUnderReview(s);
+  const isOwn =
+    state.connectedAddress && s.creator.toLowerCase() === state.connectedAddress.toLowerCase();
+  const flagBtn = renderCardFlagBtn(s, {
+    underReview,
+    isOwn,
+    violated,
+    inPlayer: Boolean(embed),
+  });
   const player = embed
-    ? videoPlayerHtml({ embed, variant: 'sm', lazy: true, shortId: s.id, videoUrl: s.url })
-    : videoLinkHtml(s.url, { className: 'video-link player-link' });
+    ? videoPlayerHtml({
+        embed,
+        variant: 'sm',
+        lazy: true,
+        shortId: s.id,
+        videoUrl: s.url,
+        controlsExtra: flagBtn,
+      })
+    : `<div class="player-link-row">${videoLinkHtml(s.url, { className: 'video-link player-link' })}${flagBtn}</div>`;
 
   const name = profileNameFor(s.creator);
   const byLabel = name || shortAddress(s.creator);
   const byHtml = userProfileLinkHtml(s.creator, byLabel);
-  const isOwn =
-    state.connectedAddress && s.creator.toLowerCase() === state.connectedAddress.toLowerCase();
-  const upvoteTitle = isOwn ? 'You cannot upvote your own short' : `Pay ${PRICE_INTERACT_CRC} CRC to upvote`;
-  const violated = isShortViolated(s);
-  const underReview = isShortUnderReview(s);
   const removedBadge =
     violated && state.view === 'profile'
       ? `<span class="chip chip--warn">Removed</span>`
       : '';
-  const flagBtn = renderCardFlagBtn(s, { underReview, isOwn, violated });
+  const showEdit = isOwn && state.view === 'profile' && state.profileTab === 'published';
+  const editBtn = showEdit
+    ? `<button type="button" class="btn btn--ghost btn--sm short-edit-btn" data-action="go-edit" data-id="${escapeHtml(s.id)}" title="Edit">Edit</button>`
+    : '';
 
   return `
-    <article class="card short-card${violated ? ' short-card--violated' : ''}">
+    <article class="card short-card${violated ? ' short-card--violated' : ''}${isOwn ? ' short-card--own' : ''}">
       <div class="short-card-media">
         ${player}
-        ${flagBtn}
       </div>
       <div class="short-body">
         <div class="short-title-row">
           <h3 class="short-title clickable" data-action="go-detail" data-id="${escapeHtml(s.id)}">${shortTitleWithDurationHtml(s)}</h3>
           ${removedBadge}
+          ${editBtn}
         </div>
         <div class="short-sub muted">by ${byHtml} · ${escapeHtml(timeAgo(s.createdAt))}</div>
         <div class="chips chips--sm">${cats}</div>
-        <div class="card-actions">
-          <button
-            type="button"
-            class="btn btn--icon"
-            data-action="card-upvote"
-            data-id="${escapeHtml(s.id)}"
-            ${isOwn || violated ? 'disabled' : ''}
-            title="${escapeHtml(upvoteTitle)}"
-          >👍 <span class="count">${s.upvotes || 0}</span></button>
-          ${saveButtonHtml(s)}
-          <button
-            type="button"
-            class="btn btn--icon"
-            data-action="card-comment"
-            data-id="${escapeHtml(s.id)}"
-            title="Open comments"
-          >💬 <span class="count">${s.comments?.length || 0}</span></button>
-        </div>
+        ${shortCardActionsHtml(s)}
       </div>
     </article>
   `;
 }
+
+const FLAGGED_PROFILE_TIP = 'Shorts you flagged and your uploads that were flagged. Tap to view them all.';
 
 function profileShortsBase() {
   const me = activeProfileAddress().toLowerCase();
@@ -1212,6 +1459,15 @@ function profileShortsBase() {
   }
   if (state.profileTab === 'saved') {
     return all.filter((s) => (s.savers || []).some((v) => v?.toLowerCase() === me));
+  }
+  if (state.profileTab === 'strikes') {
+    return all.filter((s) => isCreatorStrike(s, me));
+  }
+  if (state.profileTab === 'flagged') {
+    return all.filter((s) => isProfileFlagged(s, me));
+  }
+  if (state.profileTab === 'praise') {
+    return all.filter((s) => isFlaggerWin(s, me));
   }
   return all.filter((s) => (s.comments || []).some((c) => c.by?.toLowerCase() === me));
 }
@@ -1387,10 +1643,13 @@ function listView() {
 
 function createView() {
   const d = state.createDraft;
-  const priceInfo = myPublishPrice();
-  const priceHint = priceInfo && publishPriceHint(priceInfo)
-    ? `<p class="small muted publish-price-hint">${escapeHtml(publishPriceHint(priceInfo))}</p>`
-    : '';
+  const editingId = state.editingShortId;
+  const editing = editingId ? getShort(editingId) : null;
+  const priceInfo = editing ? null : myPublishPrice();
+  const priceHint =
+    !editing && priceInfo && publishPriceHint(priceInfo)
+      ? `<p class="small muted publish-price-hint">${escapeHtml(publishPriceHint(priceInfo))}</p>`
+      : '';
   const options = allKnownCategories();
   const createDropdown = state.createCategoryOpen
     ? renderDropdown({
@@ -1404,11 +1663,17 @@ function createView() {
         describeGenres: true,
       })
     : '';
+  const backAction = editing ? 'go-back' : 'go-list';
+  const heading = editing ? 'Edit short' : 'Publish a new short';
+  const submitLabel = editing ? 'Save changes' : publishButtonLabel();
+  const deleteBtn = editing
+    ? `<button class="btn btn--danger form-delete" type="button" data-action="delete-short" data-id="${escapeHtml(editingId)}">Delete</button>`
+    : '';
 
   return `
-    <button class="btn btn--ghost back" type="button" data-action="go-list">← Back</button>
+    <button class="btn btn--ghost back" type="button" data-action="${backAction}">← Back</button>
     <form class="card form" data-action="submit-create" novalidate>
-      <h2>Publish a new short</h2>
+      <h2>${escapeHtml(heading)}</h2>
       ${priceHint}
 
       <label>
@@ -1458,8 +1723,9 @@ function createView() {
       </div>
 
       <div class="form-actions">
-        <button class="btn btn--primary" type="submit">${escapeHtml(publishButtonLabel())}</button>
-        <button class="btn btn--ghost" type="button" data-action="go-list">Cancel</button>
+        <button class="btn btn--primary" type="submit">${escapeHtml(submitLabel)}</button>
+        <button class="btn btn--ghost" type="button" data-action="${backAction}">Cancel</button>
+        ${deleteBtn}
       </div>
     </form>
   `;
@@ -1477,9 +1743,14 @@ function leaderboardUserAvatar(address) {
 function leaderboardView() {
   const sortKey = state.leaderboardSort;
   const rows = sortLeaderboardRows(computeLeaderboard(state.shorts), sortKey);
-  const connected = state.connectedAddress?.toLowerCase() || null;
 
   const pageTitle = leaderboardPageTitle(sortKey);
+  const myRank = myLeaderboardRank(rows, sortKey);
+  const myRankHtml =
+    myRank != null
+      ? `<span class="leaderboard-my-rank" aria-label="Your rank">#${myRank}</span>`
+      : '';
+  const titleLabelHtml = `<span class="leaderboard-title-text"><span class="leaderboard-title-label">${escapeHtml(pageTitle.label)}</span>${myRankHtml}</span>`;
 
   const headerStats = LEADERBOARD_COLUMNS.map(
     (col) => `
@@ -1511,35 +1782,41 @@ function leaderboardView() {
           .map((row, i) => {
             const rank = i + 1;
             const name = profileNameFor(row.address) || shortAddress(row.address);
-            const isMe = connected && row.address === connected;
+            const isMe = isOwnProfileAddress(row.address);
             return `
-              <div class="leaderboard-row${isMe ? ' leaderboard-row--me' : ''}">
-                <span class="leaderboard-rank">${rank}</span>
-                <button
-                  type="button"
-                  class="leaderboard-avatar-btn"
-                  data-action="go-user-profile"
-                  data-address="${escapeHtml(row.address)}"
-                  title="View profile"
-                  aria-label="View ${escapeHtml(name)} profile"
-                >${leaderboardUserAvatar(row.address)}</button>
-                <button
-                  type="button"
-                  class="profile-link leaderboard-name"
-                  data-action="go-user-profile"
-                  data-address="${escapeHtml(row.address)}"
-                  title="${escapeHtml(row.address)}"
-                >${escapeHtml(name)}</button>
-                ${LEADERBOARD_COLUMNS.map((col) => leaderboardStatHtml(row, col)).join('')}
+              <div class="${leaderboardRowClass(isMe)}">
+                <div class="leaderboard-row">
+                  <span class="leaderboard-rank" aria-label="Rank ${rank}">#${rank}</span>
+                  <button
+                    type="button"
+                    class="leaderboard-avatar-btn"
+                    data-action="go-user-profile"
+                    data-address="${escapeHtml(row.address)}"
+                    title="View profile"
+                    aria-label="View ${escapeHtml(name)} profile"
+                  >${leaderboardUserAvatar(row.address)}</button>
+                  <button
+                    type="button"
+                    class="profile-link leaderboard-name"
+                    data-action="go-user-profile"
+                    data-address="${escapeHtml(row.address)}"
+                    title="${escapeHtml(row.address)}"
+                  >${escapeHtml(name)}</button>
+                  ${LEADERBOARD_COLUMNS.map((col) => leaderboardStatHtml(row, col, sortKey)).join('')}
+                </div>
               </div>
             `;
           })
           .join('');
 
+  const userCountLabel =
+    rows.length === 1 ? '1 active user' : `${rows.length} active users`;
+
   return `
     <button class="btn btn--ghost back" type="button" data-action="go-back">← Back</button>
     <section class="card leaderboard-card">
-      <h2 class="leaderboard-title"><span class="leaderboard-title-icon" aria-hidden="true">🏆</span><span class="leaderboard-title-icon" aria-hidden="true">${pageTitle.icon}</span> ${escapeHtml(pageTitle.label)}</h2>
+      <h2 class="leaderboard-title"><span class="leaderboard-title-icon" aria-hidden="true">🏆</span><span class="leaderboard-title-icon" aria-hidden="true">${pageTitle.icon}</span>${titleLabelHtml}</h2>
+      ${rows.length ? `<p class="leaderboard-meta">${escapeHtml(userCountLabel)}</p>` : ''}
       ${
         rows.length
           ? `<div class="leaderboard-table-wrap">${header}<div class="leaderboard-list">${list}</div></div>`
@@ -1592,24 +1869,36 @@ function profileView() {
 
   const flagWins = countFlaggerWins(address, all);
   const strikes = countCreatorViolations(address, all);
+  const flagged = countProfileFlagged(address, all);
   const karmaHtml = `
     <div class="profile-karma-row">
       <button
         type="button"
-        class="profile-karma profile-karma--strike"
-        data-action="karma-tip"
+        class="profile-karma profile-karma--flagged${state.profileTab === 'flagged' ? ' profile-karma--on' : ''}"
+        data-action="profile-karma"
+        data-karma="flagged"
+        title="${escapeHtml(FLAGGED_PROFILE_TIP)}"
+        aria-label="${escapeHtml(FLAGGED_PROFILE_TIP)}"
+        aria-pressed="${state.profileTab === 'flagged'}"
+      >🚩 ${flagged}</button>
+      <button
+        type="button"
+        class="profile-karma profile-karma--strike${state.profileTab === 'strikes' ? ' profile-karma--on' : ''}"
+        data-action="profile-karma"
         data-karma="strike"
         title="${escapeHtml(STRIKE_KARMA_TIP)}"
         aria-label="${escapeHtml(STRIKE_KARMA_TIP)}"
-      >🚩 ${strikes}</button>
+        aria-pressed="${state.profileTab === 'strikes'}"
+      >❌ ${strikes}</button>
       <button
         type="button"
-        class="profile-karma profile-karma--praise"
-        data-action="karma-tip"
+        class="profile-karma profile-karma--praise${state.profileTab === 'praise' ? ' profile-karma--on' : ''}"
+        data-action="profile-karma"
         data-karma="praise"
         title="${escapeHtml(PRAISE_KARMA_TIP)}"
         aria-label="${escapeHtml(PRAISE_KARMA_TIP)}"
-      >🙏 ${flagWins}</button>
+        aria-pressed="${state.profileTab === 'praise'}"
+      >👮 ${flagWins}</button>
     </div>
   `;
 
@@ -1620,7 +1909,14 @@ function profileView() {
     { key: 'saved', label: 'Saved', icon: '💾' },
   ];
 
-  const activeTab = tabs.find((t) => t.key === state.profileTab) || tabs[0];
+  const karmaTabs = {
+    flagged: { label: 'Flagged', icon: '🚩' },
+    strikes: { label: 'my Strikes', icon: '❌' },
+    praise: { label: 'I removed', icon: '👮' },
+  };
+
+  const activeTab =
+    karmaTabs[state.profileTab] || tabs.find((t) => t.key === state.profileTab) || tabs[0];
 
   const tabBar = `
     <div class="profile-tabs">
@@ -1660,12 +1956,18 @@ function profileView() {
         upvoted: 'You haven\'t upvoted any shorts yet.',
         commented: 'You haven\'t commented on any shorts yet.',
         saved: 'You haven\'t saved any shorts yet.',
+        flagged: 'No flag activity yet — nothing you flagged and no flags on your uploads.',
+        strikes: 'No removed shorts on your record.',
+        praise: 'No upheld flags yet.',
       }[state.profileTab]
     : {
         published: 'No published shorts yet.',
         upvoted: 'No upvoted shorts yet.',
         commented: 'No commented shorts yet.',
         saved: 'No saved shorts yet.',
+        flagged: 'No flag activity on this profile.',
+        strikes: 'No removed shorts.',
+        praise: 'No upheld flags.',
       }[state.profileTab];
   const emptyLabel =
     items.length === 0 && hasActiveFilters && baseItems.length > 0
@@ -1706,18 +2008,35 @@ function detailView() {
     `;
   }
   const embed = videoEmbedUrl(s.url);
-  const player = embed
-    ? videoPlayerHtml({ embed, variant: 'bleed', lazy: false, shortId: s.id, videoUrl: s.url })
-    : `<p>${videoLinkHtml(s.url, { className: 'video-link player-link' })}</p>`;
-  const cats = (s.categories || [])
-    .map((c) => `<span class="chip chip--sm">${escapeHtml(c)}</span>`)
-    .join('');
   const isOwn =
     state.connectedAddress && s.creator.toLowerCase() === state.connectedAddress.toLowerCase();
   const violated = isShortViolated(s);
   const underReview = isShortUnderReview(s);
+  const flagBtn = renderCardFlagBtn(s, {
+    underReview,
+    isOwn,
+    violated,
+    onDetail: true,
+    inPlayer: Boolean(embed),
+  });
+  const player = embed
+    ? videoPlayerHtml({
+        embed,
+        variant: 'bleed',
+        lazy: false,
+        shortId: s.id,
+        videoUrl: s.url,
+        controlsExtra: flagBtn,
+      })
+    : `<p class="player-link-row">${videoLinkHtml(s.url, { className: 'video-link player-link' })}${flagBtn}</p>`;
+  const cats = (s.categories || [])
+    .map((c) => `<span class="chip chip--sm">${escapeHtml(c)}</span>`)
+    .join('');
   const creatorName = profileNameFor(s.creator) || shortAddress(s.creator);
   const creatorHtml = userProfileLinkHtml(s.creator, creatorName);
+  const editBtn = isOwn
+    ? `<button type="button" class="btn btn--ghost btn--sm" data-action="go-edit" data-id="${escapeHtml(s.id)}">Edit</button>`
+    : '';
   const comments = (s.comments || [])
     .slice()
     .reverse()
@@ -1725,9 +2044,16 @@ function detailView() {
       (c) => {
         const cname = profileNameFor(c.by) || shortAddress(c.by);
         const chtml = userProfileLinkHtml(c.by, cname);
+        const canDelete = isOwnProfileAddress(c.by);
+        const deleteBtn = canDelete
+          ? `<button type="button" class="btn btn--ghost comment-delete" data-action="delete-comment" data-comment-id="${escapeHtml(c.id)}" title="Delete comment (CRC not refunded)">Delete</button>`
+          : '';
         return `
         <li class="comment">
-          <div class="comment-meta muted">${chtml} · ${escapeHtml(timeAgo(c.createdAt))}</div>
+          <div class="comment-head">
+            <div class="comment-meta muted">${chtml} · ${escapeHtml(timeAgo(c.createdAt))}</div>
+            ${deleteBtn}
+          </div>
           <div>${escapeHtml(c.text)}</div>
         </li>
       `;
@@ -1736,43 +2062,19 @@ function detailView() {
     .join('');
   return `
     <button class="btn btn--ghost back" type="button" data-action="go-list">← Back</button>
-    <article class="card detail${violated ? ' detail--violated' : ''}">
-      <h2>${shortTitleWithDurationHtml(s)}</h2>
+    <article class="card detail${violated ? ' detail--violated' : ''}${isOwn ? ' detail--own' : ''}">
+      <div class="detail-head">
+        <h2>${shortTitleWithDurationHtml(s)}</h2>
+        ${editBtn}
+      </div>
       <div class="short-sub muted">by ${creatorHtml} · ${escapeHtml(timeAgo(s.createdAt))}</div>
       <div class="chips chips--sm">${cats}</div>
       ${violated ? '<p class="moderation-removed-banner">This short was removed after community moderation.</p>' : `
         <div class="short-card-media detail-media">
           ${player}
-          ${renderCardFlagBtn(s, { underReview, isOwn, violated, onDetail: true })}
         </div>
+        ${shortCardActionsHtml(s)}
       `}
-      ${
-        violated
-          ? ''
-          : `<div class="actions-row">
-        <button
-          class="btn btn--primary"
-          type="button"
-          data-action="upvote"
-          ${isOwn ? 'disabled title="You cannot upvote your own short"' : ''}
-        >👍 Upvote ${s.upvotes || 0} · ${PRICE_INTERACT_CRC} CRC</button>
-        <button
-          class="btn${isSavedBy(s, state.connectedAddress) ? ' btn--saved' : ''}"
-          type="button"
-          data-action="save"
-          ${!state.connectedAddress || isSavedBy(s, state.connectedAddress) ? 'disabled' : ''}
-          title="${escapeHtml(
-            !state.connectedAddress
-              ? 'Connect wallet to save'
-              : isSavedBy(s, state.connectedAddress)
-                ? 'Saved'
-                : isOwn
-                  ? 'Save your short for free'
-                  : 'Save for free',
-          )}"
-        >💾 Save ${s.saves || 0}</button>
-      </div>`
-      }
     </article>
 
     ${renderModerationPanel(s)}
@@ -1843,11 +2145,39 @@ function bindEvents() {
   );
   app.querySelectorAll('[data-action="go-profile"]').forEach((el) =>
     el.addEventListener('click', () => {
+      setNotificationsOpen(false);
       if (state.connectedAddress) {
         setView('profile', null, { profileAddress: state.connectedAddress });
       } else {
         setView('profile');
       }
+    }),
+  );
+  app.querySelectorAll('[data-action="toggle-notifications"]').forEach((el) =>
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setNotificationsOpen(!state.notificationsOpen);
+    }),
+  );
+  app.querySelectorAll('[data-action="mark-all-notifications-read"]').forEach((el) =>
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (state.connectedAddress) {
+        markAllNotificationsRead(state.connectedAddress);
+        rerender();
+      }
+    }),
+  );
+  app.querySelectorAll('[data-action="open-notification"]').forEach((el) =>
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = e.currentTarget.dataset.id;
+      const shortId = e.currentTarget.dataset.shortId;
+      if (state.connectedAddress && id) {
+        markNotificationRead(state.connectedAddress, id);
+      }
+      setNotificationsOpen(false);
+      if (shortId) setView('detail', shortId);
     }),
   );
   app.querySelectorAll('[data-action="go-user-profile"]').forEach((el) =>
@@ -1877,11 +2207,12 @@ function bindEvents() {
       if (tab) setProfileTab(tab);
     }),
   );
-  app.querySelectorAll('[data-action="karma-tip"]').forEach((el) =>
+  app.querySelectorAll('[data-action="profile-karma"]').forEach((el) =>
     el.addEventListener('click', () => {
-      const tip =
-        el.dataset.karma === 'strike' ? STRIKE_KARMA_TIP : PRAISE_KARMA_TIP;
-      setStatus('success', tip);
+      const karma = el.dataset.karma;
+      if (karma === 'flagged') setProfileTab('flagged');
+      else if (karma === 'strike') setProfileTab('strikes');
+      else if (karma === 'praise') setProfileTab('praise');
     }),
   );
   app.querySelectorAll('[data-action="copy-feedback"]').forEach((el) =>
@@ -1899,6 +2230,14 @@ function bindEvents() {
     el.addEventListener('click', (e) => {
       const id = e.currentTarget.dataset.id;
       if (id) setView('detail', id);
+    }),
+  );
+  app.querySelectorAll('[data-action="go-edit"]').forEach((el) =>
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const id = e.currentTarget.dataset.id;
+      if (id) setView('edit', id);
     }),
   );
   app.querySelectorAll('[data-action="open-vote"]').forEach((el) =>
@@ -2108,11 +2447,19 @@ function bindEvents() {
       const submitBtn = createForm.querySelector('button[type="submit"]');
       if (submitBtn) submitBtn.disabled = true;
       const d = state.createDraft;
-      publishShort({
-        title: d.title,
-        url: d.url,
-        categories: d.categories,
-      })
+      const editingId = state.editingShortId;
+      const action = editingId
+        ? updateUpload(editingId, {
+            title: d.title,
+            url: d.url,
+            categories: d.categories,
+          })
+        : publishShort({
+            title: d.title,
+            url: d.url,
+            categories: d.categories,
+          });
+      action
         .catch(() => {})
         .finally(() => {
           if (submitBtn) submitBtn.disabled = false;
@@ -2120,13 +2467,35 @@ function bindEvents() {
     });
   }
 
+  app.querySelectorAll('[data-action="delete-short"]').forEach((el) =>
+    el.addEventListener('click', () => {
+      const id = el.dataset.id || state.editingShortId;
+      if (!id) return;
+      if (!confirm('Delete this short permanently? This cannot be undone.')) return;
+      el.disabled = true;
+      deleteUpload(id)
+        .catch(() => {})
+        .finally(() => {
+          el.disabled = false;
+        });
+    }),
+  );
+
   // Card actions (list)
   app.querySelectorAll('[data-action="card-upvote"]').forEach((el) =>
     el.addEventListener('click', (e) => {
       const id = e.currentTarget.dataset.id;
       if (!id) return;
-      e.currentTarget.disabled = true;
-      upvoteAction(id).catch(() => {});
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      const short = getShort(id);
+      const action =
+        short && hasUpvoted(short, state.connectedAddress) ? unupvoteAction(id) : upvoteAction(id);
+      action
+        .catch(() => {})
+        .finally(() => {
+          btn.disabled = false;
+        });
     }),
   );
   app.querySelectorAll('[data-action="card-save"]').forEach((el) =>
@@ -2135,13 +2504,12 @@ function bindEvents() {
       if (!id) return;
       const btn = e.currentTarget;
       btn.disabled = true;
-      saveAction(id)
+      const short = getShort(id);
+      const action = short && isSavedBy(short, state.connectedAddress) ? unsaveAction(id) : saveAction(id);
+      action
         .catch(() => {})
         .finally(() => {
-          const short = getShort(id);
-          if (short && !isSavedBy(short, state.connectedAddress)) {
-            btn.disabled = false;
-          }
+          btn.disabled = false;
         });
     }),
   );
@@ -2155,31 +2523,19 @@ function bindEvents() {
     }),
   );
 
-  // Detail actions
-  const upvoteBtn = app.querySelector('[data-action="upvote"]');
-  if (upvoteBtn) {
-    upvoteBtn.addEventListener('click', () => {
-      if (!state.selectedShortId) return;
-      upvoteBtn.disabled = true;
-      upvoteAction(state.selectedShortId)
+  app.querySelectorAll('[data-action="delete-comment"]').forEach((el) =>
+    el.addEventListener('click', (e) => {
+      const commentId = e.currentTarget.dataset.commentId;
+      if (!commentId || !state.selectedShortId) return;
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      deleteCommentAction(state.selectedShortId, commentId)
         .catch(() => {})
         .finally(() => {
-          upvoteBtn.disabled = false;
+          btn.disabled = false;
         });
-    });
-  }
-  const saveBtn = app.querySelector('[data-action="save"]');
-  if (saveBtn) {
-    saveBtn.addEventListener('click', () => {
-      if (!state.selectedShortId) return;
-      saveBtn.disabled = true;
-      saveAction(state.selectedShortId)
-        .catch(() => {})
-        .finally(() => {
-          saveBtn.disabled = false;
-        });
-    });
-  }
+    }),
+  );
   const commentForm = app.querySelector('form[data-action="submit-comment"]');
   if (commentForm) {
     commentForm.addEventListener('submit', (e) => {
@@ -2232,6 +2588,34 @@ function bindEvents() {
     });
   });
 
+  app.querySelectorAll('[data-action="withdraw-flag"]').forEach((el) =>
+    el.addEventListener('click', (e) => {
+      const id = e.currentTarget.dataset.id;
+      if (!id) return;
+      setPendingWithdrawFlag(id);
+    }),
+  );
+
+  app.querySelectorAll('[data-action="cancel-withdraw-flag"]').forEach((el) =>
+    el.addEventListener('click', () => {
+      clearPendingWithdrawFlag();
+    }),
+  );
+
+  app.querySelectorAll('[data-action="confirm-withdraw-flag"]').forEach((el) =>
+    el.addEventListener('click', (e) => {
+      const id = e.currentTarget.dataset.id;
+      if (!id) return;
+      e.currentTarget.disabled = true;
+      withdrawFlag(id)
+        .catch(() => {})
+        .finally(() => {
+          clearPendingWithdrawFlag();
+          e.currentTarget.disabled = false;
+        });
+    }),
+  );
+
   app.querySelectorAll('[data-action="vote-violation"]').forEach((el) =>
     el.addEventListener('click', (e) => {
       const id = e.currentTarget.dataset.id;
@@ -2268,8 +2652,16 @@ function handleOutsideClick(e) {
   if (!target || !target.closest) return;
   const closestDd = target.closest('.dropdown');
   const closestTrigger = target.closest(
-    '[data-action="toggle-filter-open"], [data-action="toggle-duration-filter-open"], [data-action="toggle-sort-open"], [data-action="toggle-create-open"]',
+    '[data-action="toggle-filter-open"], [data-action="toggle-duration-filter-open"], [data-action="toggle-sort-open"], [data-action="toggle-create-open"], [data-action="toggle-notifications"]',
   );
+
+  if (state.notificationsOpen) {
+    const inNotifyDd = closestDd?.id === 'notify-dd';
+    const isNotifyTrigger = closestTrigger?.dataset.action === 'toggle-notifications';
+    if (!inNotifyDd && !isNotifyTrigger && !target.closest('.notify-item')) {
+      setNotificationsOpen(false);
+    }
+  }
 
   if (state.filterOpen) {
     const inFilterDd = closestDd?.id === 'filter-dd';

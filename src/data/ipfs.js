@@ -22,6 +22,10 @@ function pinListEndpoint() {
   return `${pinataBase()}/data/pinList`;
 }
 
+function unpinEndpoint(cid) {
+  return `${pinataBase()}/pinning/unpin/${encodeURIComponent(cid)}`;
+}
+
 import { APP_NAMESPACE, LEGACY_APP_NAMESPACE } from '../app/config.js';
 
 export { APP_NAMESPACE };
@@ -161,6 +165,41 @@ function dedupePins(pins) {
   return out;
 }
 
+/** Remove a pin from Pinata (stops discovery via pinList; content may linger on public gateways). */
+export async function unpinCid(cid) {
+  const token = jwt();
+  if (!token) {
+    throw new Error('IPFS pinning is not configured (set VITE_PINATA_JWT)');
+  }
+  if (!cid || typeof cid !== 'string') {
+    throw new Error('CID required');
+  }
+  const res = await fetchWithRetry(unpinEndpoint(cid), {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = await res.text();
+    } catch {
+      /* ignore */
+    }
+    throw new Error(`Pinata unpin failed (${res.status}): ${detail.slice(0, 200)}`);
+  }
+  clearCachedJson(cid);
+}
+
+/** Find and unpin every pin matching `keyvalues` (current + legacy app namespaces). */
+export async function unpinMatchingPins({ keyvalues = {} } = {}) {
+  const pins = await listPinnedCidsAllNamespaces({ keyvalues });
+  const cids = dedupePins(pins).map((p) => p.cid);
+  for (const cid of cids) {
+    await unpinCid(cid);
+  }
+  return cids;
+}
+
 async function fetchWithRetry(url, options, retries = 2) {
   let lastErr = null;
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -205,6 +244,17 @@ function writeCachedJson(cid, value) {
     }
   } catch {
     /* ignore quota */
+  }
+}
+
+function clearCachedJson(cid) {
+  memoryCache.delete(cid);
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem(lsKey(cid));
+    }
+  } catch {
+    /* ignore */
   }
 }
 

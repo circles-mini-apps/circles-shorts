@@ -1,10 +1,12 @@
-import { listShorts, reconcileAllModeration } from '../data/storage.js';
+import { listShorts, reconcileAllModeration, getShort } from '../data/storage.js';
+import { syncUploadNotifications, syncFlaggerNotifications } from '../data/notifications.js';
+import { syncUserFlagsFromShorts } from '../data/userFlags.js';
 import { ensureVideoDurations } from '../data/videoDuration.js';
 
 /** @typedef {'disconnected' | 'connecting' | 'connected' | 'error'} WalletPhase */
 /** @typedef {'recent' | 'top' | 'comments' | 'saved'} SortMode */
 /** @typedef {'list' | 'create' | 'detail' | 'profile' | 'leaderboard'} View */
-/** @typedef {'published' | 'upvoted' | 'commented' | 'saved'} ProfileTab */
+/** @typedef {'published' | 'upvoted' | 'commented' | 'saved' | 'flagged' | 'strikes' | 'praise'} ProfileTab */
 
 export const state = {
   /** @type {WalletPhase} */
@@ -19,6 +21,9 @@ export const state = {
   view: 'list',
   /** @type {string | null} */
   selectedShortId: null,
+  /** When set, create view edits this short instead of publishing a new one. */
+  /** @type {string | null} */
+  editingShortId: null,
   /** Show the flag report form on detail view (opened via 🚩). */
   /** @type {boolean} */
   flagFormOpen: false,
@@ -102,8 +107,16 @@ export const state = {
   /** @type {boolean} */
   scrollProfileToTop: false,
 
+  /** Notifications panel open in header. */
+  /** @type {boolean} */
+  notificationsOpen: false,
+
+  /** Detail view: short id awaiting withdraw-flag confirmation. */
+  /** @type {string | null} */
+  pendingWithdrawFlagId: null,
+
   /** Leaderboard column sort (rankings view). */
-  /** @type {'total' | 'uploaded' | 'liked' | 'saved' | 'commented' | 'spentCrc' | 'earnedCrc'} */
+  /** @type {'total' | 'uploaded' | 'liked' | 'saved' | 'commented' | 'spentCrc' | 'earnedCrc' | 'removed'} */
   leaderboardSort: 'earnedCrc',
 
   /** Runtime cache keyed by video URL (seconds). */
@@ -145,6 +158,11 @@ export function setVideoDuration(url, seconds) {
 export function refreshShorts() {
   reconcileAllModeration();
   state.shorts = listShorts();
+  if (state.connectedAddress) {
+    syncUserFlagsFromShorts(state.connectedAddress, state.shorts);
+    syncUploadNotifications(state.connectedAddress, state.shorts);
+    syncFlaggerNotifications(state.connectedAddress, state.shorts);
+  }
   notify();
   void ensureVideoDurations(state.shorts, (url, seconds) => {
     setVideoDuration(url, seconds);
@@ -241,6 +259,8 @@ function resetTransientUiState() {
   state.durationFilterOpen = false;
   state.sortOpen = false;
   state.createCategoryOpen = false;
+  state.notificationsOpen = false;
+  state.pendingWithdrawFlagId = null;
 }
 
 export function goBack() {
@@ -256,6 +276,7 @@ export function goBack() {
   state.listVisibleCount = prev.listVisibleCount;
   state.scrollRestoreY = prev.scrollY;
   state.flagFormOpen = false;
+  state.editingShortId = null;
   resetTransientUiState();
   notify();
 }
@@ -294,14 +315,40 @@ export function setView(view, selectedShortId = null, options = {}) {
     state.navStack = [];
   }
 
+  if (view === 'edit' && selectedShortId) {
+    if (from !== 'create') {
+      state.navStack.push(captureNavFrame());
+    }
+    const short = getShort(selectedShortId);
+    state.editingShortId = selectedShortId;
+    state.createDraft = short
+      ? {
+          title: short.title || '',
+          url: short.url || '',
+          categories: [...(short.categories || [])],
+        }
+      : { title: '', url: '', categories: [] };
+    state.createCategoryQuery = '';
+    state.view = 'create';
+    state.selectedShortId = null;
+    resetTransientUiState();
+    notify();
+    return;
+  }
+
   state.view = view;
   state.selectedShortId = selectedShortId;
   state.flagFormOpen = view === 'detail' && Boolean(options.openFlagForm);
+  if (view !== 'create') {
+    state.editingShortId = null;
+  }
   if (view === 'profile') {
     state.profileAddress = options.profileAddress?.trim() || state.connectedAddress || null;
+    state.profileTab = 'published';
   }
   resetTransientUiState();
   if (view === 'create') {
+    state.editingShortId = null;
     state.createDraft = { title: '', url: '', categories: [] };
     state.createCategoryQuery = '';
   }
@@ -314,7 +361,8 @@ export function setFlagFormOpen(open) {
 }
 
 export function setProfileTab(tab) {
-  if (!['published', 'upvoted', 'commented', 'saved'].includes(tab)) return;
+  const allowed = ['published', 'upvoted', 'commented', 'saved', 'flagged', 'strikes', 'praise'];
+  if (!allowed.includes(tab)) return;
   state.profileTab = tab;
   resetListPagination();
   notify();
@@ -418,7 +466,16 @@ export function setSort(sort) {
 }
 
 export function setLeaderboardSort(sort) {
-  const allowed = ['total', 'uploaded', 'liked', 'saved', 'commented', 'spentCrc', 'earnedCrc'];
+  const allowed = [
+    'total',
+    'uploaded',
+    'liked',
+    'saved',
+    'commented',
+    'spentCrc',
+    'earnedCrc',
+    'removed',
+  ];
   if (!allowed.includes(sort)) return;
   state.leaderboardSort = sort;
   notify();
@@ -455,6 +512,28 @@ export function setCreateCategoryOpen(open) {
 
 export function setCreateCategoryQuery(q) {
   state.createCategoryQuery = q;
+  notify();
+}
+
+export function setNotificationsOpen(open) {
+  state.notificationsOpen = Boolean(open);
+  if (state.notificationsOpen) {
+    state.filterOpen = false;
+    state.durationFilterOpen = false;
+    state.sortOpen = false;
+    state.createCategoryOpen = false;
+  }
+  notify();
+}
+
+export function setPendingWithdrawFlag(shortId) {
+  state.pendingWithdrawFlagId = shortId || null;
+  notify();
+}
+
+export function clearPendingWithdrawFlag() {
+  if (!state.pendingWithdrawFlagId) return;
+  state.pendingWithdrawFlagId = null;
   notify();
 }
 

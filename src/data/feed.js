@@ -26,6 +26,7 @@ import {
   upsertRemoteModVote,
   upsertRemoteRuling,
   reconcileAllModeration,
+  isShortRevoked,
 } from './storage.js';
 
 const MAX_CONCURRENT_FETCHES = 6;
@@ -101,6 +102,7 @@ export async function refreshFeedFromRemote() {
   for (const r of shortRecords) {
     if (r.__error) continue;
     const { pin, data } = r;
+    if (isShortRevoked(pin.cid)) continue;
     if (!isShortContent(data)) continue;
     upsertRemoteShort({
       cid: pin.cid,
@@ -110,6 +112,8 @@ export async function refreshFeedFromRemote() {
       creator: data.creator,
       createdAt: data.createdAt,
       durationSeconds: data.durationSeconds,
+      shortId: data.shortId,
+      editedAt: data.editedAt,
     });
     shortsAdded++;
   }
@@ -175,8 +179,9 @@ export async function refreshFeedFromRemote() {
     if (!shortCid) continue;
     const out = upsertRemoteFlag({
       shortCid,
+      shortId: data.shortId || pin.keyvalues?.shortId,
       flagCid: pin.cid,
-      flagger: data.flagger,
+      flagger: data.flagger || pin.keyvalues?.flagger,
       category: data.category,
       explanation: data.explanation,
       reason: data.reason,
