@@ -10,6 +10,7 @@
     "tunnel": "cloudflared tunnel --url http://localhost:5173",
     "deploy": "npm run build && wrangler pages deploy dist --project-name=circles-shorts --branch=main --commit-dirty=true",
     "deploy:pinata": "npm run build && node scripts/deploy-pinata.mjs",
+    "restore:pins": "node scripts/restore-unpinned.mjs",
     "register:org": "node scripts/register-platform-org.mjs"
   },
   "dependencies": {

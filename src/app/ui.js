@@ -793,6 +793,13 @@ function notificationsPanelHtml() {
       ${
         open
           ? `
+        <button
+          type="button"
+          class="notify-backdrop"
+          data-action="close-notifications"
+          aria-label="Close notifications"
+          tabindex="-1"
+        ></button>
         <div class="notify-panel dropdown" id="notify-dd" role="dialog" aria-label="Notifications">
           <div class="notify-panel-head">
             <span class="notify-panel-title">Notifications</span>
@@ -2161,6 +2168,12 @@ function bindEvents() {
       setNotificationsOpen(!state.notificationsOpen);
     }),
   );
+  app.querySelectorAll('[data-action="close-notifications"]').forEach((el) =>
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setNotificationsOpen(false);
+    }),
+  );
   app.querySelectorAll('[data-action="mark-all-notifications-read"]').forEach((el) =>
     el.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -2658,9 +2671,10 @@ function handleOutsideClick(e) {
   );
 
   if (state.notificationsOpen) {
-    const inNotifyDd = closestDd?.id === 'notify-dd';
+    const inNotifyUi =
+      target.closest('.notify-wrap') || target.closest('#notify-dd');
     const isNotifyTrigger = closestTrigger?.dataset.action === 'toggle-notifications';
-    if (!inNotifyDd && !isNotifyTrigger && !target.closest('.notify-item')) {
+    if (!inNotifyUi && !isNotifyTrigger) {
       setNotificationsOpen(false);
     }
   }
@@ -2761,7 +2775,7 @@ export function initUi() {
   setupScrollTopButton();
   setupPlayerFullscreen();
   if (!outsideInstalled) {
-    document.addEventListener('mousedown', handleOutsideClick);
+    document.addEventListener('pointerdown', handleOutsideClick, true);
     document.addEventListener('click', handleCopyLinkClick);
     outsideInstalled = true;
   }

@@ -15,6 +15,10 @@ import {
   listAllAppPins,
 } from './ipfs.js';
 import { isContentKind } from '../app/config.js';
+import { crcDecimalToAtto, verifyCrcPayment, verifyInteractionPaymentForFeed } from '../../lib/ipfsTransferVerify.js';
+import { isDemoMode } from '../chain/circlesTransfer.js';
+import { PLATFORM_ORG } from '../chain/platformOrg.js';
+import { state } from '../app/state.js';
 import { recordCidAlias } from './cidAliases.js';
 import {
   getShort,
@@ -34,6 +38,53 @@ import {
 } from './storage.js';
 
 const MAX_CONCURRENT_FETCHES = 6;
+const INTERACT_ATTO = crcDecimalToAtto('0.5');
+const FLAG_ATTO = crcDecimalToAtto('0.5');
+
+function resolveFeedRpcUrl() {
+  return (
+    state?.hostContext?.circlesRpcUrl ||
+    import.meta.env.VITE_CIRCLES_RPC_URL ||
+    'https://rpc.aboutcircles.com/'
+  );
+}
+
+function shouldVerifyPayments() {
+  return !isDemoMode();
+}
+
+async function verifyInteractPayment(from, to, createdAtMs) {
+  if (!shouldVerifyPayments()) return true;
+  if (!from || !to) return false;
+  return verifyInteractionPaymentForFeed({
+    rpcUrl: resolveFeedRpcUrl(),
+    from,
+    to,
+    minAttoCrc: INTERACT_ATTO,
+    createdAtMs,
+  });
+}
+
+async function verifyFlagPayment(from, createdAtMs) {
+  if (!shouldVerifyPayments()) return true;
+  if (!from) return false;
+  return verifyCrcPayment({
+    rpcUrl: resolveFeedRpcUrl(),
+    from,
+    to: PLATFORM_ORG,
+    minAtto: FLAG_ATTO,
+    sinceMs: Math.max(0, (createdAtMs || Date.now()) - 24 * 60 * 60 * 1000),
+  });
+}
+
+function resolveShortCreator({ shortCid, shortId, data, creatorByShortCid, creatorByShortId }) {
+  return (
+    data?.creator ||
+    creatorByShortCid.get(shortCid) ||
+    (shortId ? creatorByShortId.get(shortId) : null) ||
+    null
+  );
+}
 
 /** Run an async map with a bounded concurrency. */
 async function pMap(items, fn, concurrency = MAX_CONCURRENT_FETCHES) {
@@ -126,11 +177,19 @@ export async function refreshFeedFromRemote() {
     return { pin, data };
   });
   let shortsAdded = 0;
+  /** @type {Map<string, string>} */
+  const creatorByShortCid = new Map();
+  /** @type {Map<string, string>} */
+  const creatorByShortId = new Map();
   for (const r of shortRecords) {
     if (r.__error) continue;
     const { pin, data } = r;
     if (isShortRevoked(pin.cid)) continue;
     if (!isShortContent(data)) continue;
+    if (data.creator) {
+      creatorByShortCid.set(pin.cid, data.creator);
+      if (data.shortId) creatorByShortId.set(data.shortId, data.creator);
+    }
     upsertRemoteShort({
       cid: pin.cid,
       title: data.title,
@@ -166,6 +225,15 @@ export async function refreshFeedFromRemote() {
     if (!isCommentContent(data)) continue;
     const shortCid = data.shortCid || pin.keyvalues?.shortCid;
     if (!shortCid) continue;
+    const shortId = data.shortId || pin.keyvalues?.shortId;
+    const creator = resolveShortCreator({
+      shortCid,
+      shortId,
+      data,
+      creatorByShortCid,
+      creatorByShortId,
+    });
+    if (!(await verifyInteractPayment(data.author, creator, data.createdAt))) continue;
     const out = upsertRemoteComment({
       shortCid,
       shortId: data.shortId || pin.keyvalues?.shortId,
@@ -179,11 +247,25 @@ export async function refreshFeedFromRemote() {
 
   let upvotesAdded = 0;
   resetAllUpvoteCounts();
-  for (const pin of upvotePins) {
-    const shortCid = pin.keyvalues?.shortCid;
-    const shortId = pin.keyvalues?.shortId;
-    const voter = pin.keyvalues?.voter;
+  const upvoteRecords = await pMap(upvotePins, async (pin) => {
+    const data = await fetchJsonByCid(pin.cid);
+    return { pin, data };
+  });
+  for (const r of upvoteRecords) {
+    if (r.__error) continue;
+    const { pin, data } = r;
+    const shortCid = data?.shortCid || pin.keyvalues?.shortCid;
+    const shortId = data?.shortId || pin.keyvalues?.shortId;
+    const voter = data?.voter || pin.keyvalues?.voter;
     if ((!shortCid && !shortId) || !voter) continue;
+    const creator = resolveShortCreator({
+      shortCid,
+      shortId,
+      data,
+      creatorByShortCid,
+      creatorByShortId,
+    });
+    if (!(await verifyInteractPayment(voter, creator, data?.createdAt))) continue;
     const out = upsertRemoteUpvote({ shortCid, shortId, voter });
     if (out) upvotesAdded++;
   }
@@ -212,6 +294,7 @@ export async function refreshFeedFromRemote() {
     if (!isFlagContent(data)) continue;
     const shortCid = data.shortCid || pin.keyvalues?.shortCid;
     if (!shortCid) continue;
+    if (!(await verifyFlagPayment(data.flagger || pin.keyvalues?.flagger, data.createdAt))) continue;
     const out = upsertRemoteFlag({
       shortCid,
       shortId: data.shortId || pin.keyvalues?.shortId,

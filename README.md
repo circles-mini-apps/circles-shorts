@@ -116,7 +116,18 @@ npm run deploy
 
 This runs `npm run build` and then `wrangler pages deploy dist --project-name=circles-shorts`. Subsequent runs push a new version. Stable URL: `https://circles-shorts.pages.dev` (plus a unique preview URL per deploy). The slug `shorts.pages.dev` is taken by another project on Cloudflare.
 
-Paste the stable URL into the Circles miniapp host. The `VITE_PINATA_JWT` is inlined into the JS bundle at build time, so no extra Cloudflare env config is needed.
+Paste the stable URL into the Circles miniapp host. **Do not** set `VITE_PINATA_JWT` in production builds — the Pinata key lives only on the server.
+
+### Cloudflare secrets (production)
+
+```bash
+npx wrangler pages secret put PINATA_JWT --project-name=circles-shorts
+npx wrangler pages secret put YOUTUBE_API_KEY --project-name=circles-shorts  # optional
+```
+
+Optional: `CIRCLES_RPC_URL`, `PLATFORM_ORG_ADDRESS`, `ALLOW_DEMO_IPFS=true` (local demo only).
+
+Pin/unpin requests are signed by the user's Circles wallet; the server verifies the signature and on-chain CRC payment before calling Pinata.
 
 ## Deploy to Pinata IPFS (alternative)
 
@@ -150,7 +161,9 @@ scripts/
 
 | Variable | Purpose |
 |----------|---------|
-| `VITE_PINATA_JWT` | Pinata API JWT (scopes: `pinJSONToIPFS`, `pinList`, `unpin`; optional `pinFileToIPFS` for `deploy:pinata`). Required for cross-user feed. |
+| `PINATA_JWT` | **Server only** (Cloudflare secret). Pinata scopes: `pinJSONToIPFS`, `pinList`, `unpin`. |
+| `VITE_PINATA_JWT` | Local dev only (Vite middleware). Never set in production CI/build. |
+| `VITE_IPFS_DIRECT` | Admin/emergency: bypass signed API and pin from the browser (`true` + `VITE_PINATA_JWT`). |
 | `VITE_PLATFORM_ORG_ADDRESS` | Circles **organisation** avatar that receives publish + flag fees. Inlined at build time. |
 | `VITE_IPFS_GATEWAY` | Optional dedicated Pinata gateway URL (faster reads). |
 | `VITE_HMR_HOST` | Tunnel hostname for HMR in the Circles host. |

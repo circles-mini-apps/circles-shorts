@@ -157,23 +157,22 @@ async function payCrc(toAddr, amountCrc, label, { cid } = {}) {
 }
 
 /** Pin after payment succeeds — never pin discoverable content before payCrc resolves. */
-async function pinIfEnabled(payload, { name, keyvalues = {} }) {
+async function pinIfEnabled(payload, { name, keyvalues = {}, txHashes = [], paymentKind = 'none', address } = {}) {
   if (!isPinningEnabled()) return null;
   try {
     setStatus('pending', 'Pinning to IPFS…');
-    return await pinJson(payload, { name, keyvalues });
+    return await pinJson(payload, { name, keyvalues, txHashes, paymentKind, address });
   } catch (err) {
-    // Pinning failure shouldn't block the on-chain action — surface a warning instead.
     // eslint-disable-next-line no-console
     console.warn('IPFS pinning failed', err);
     return null;
   }
 }
 
-async function pinQuiet(payload, { name, keyvalues = {} }) {
+async function pinQuiet(payload, { name, keyvalues = {}, txHashes = [], paymentKind = 'none', address } = {}) {
   if (!isPinningEnabled()) return null;
   try {
-    return await pinJson(payload, { name, keyvalues });
+    return await pinJson(payload, { name, keyvalues, txHashes, paymentKind, address });
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn('IPFS pinning failed', err);
@@ -200,13 +199,13 @@ async function unpinSaveFromIpfs(short, saver) {
   return unpinInteractionPins({ kind: 'save', short, actorKey: 'saver', actor: saver });
 }
 
-async function unpinCidsQuiet(cids) {
+async function unpinCidsQuiet(cids, address) {
   const list = [...new Set((cids || []).filter((c) => c && !String(c).startsWith('local-')))];
   if (!list.length || !isPinningEnabled()) return;
   await Promise.all(
     list.map(async (cid) => {
       try {
-        await unpinCid(cid, { invalidateCache: false });
+        await unpinCid(cid, { invalidateCache: false, address });
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn('IPFS unpin failed for', cid, err);
@@ -216,15 +215,15 @@ async function unpinCidsQuiet(cids) {
   invalidatePinListCache();
 }
 
-async function unpinCommentFromIpfs(_short, comment) {
+async function unpinCommentFromIpfs(_short, comment, address) {
   if (!comment?.cid) return [];
-  await unpinCidsQuiet([comment.cid]);
+  await unpinCidsQuiet([comment.cid], address);
   return [comment.cid];
 }
 
-async function unpinShortFromIpfs(short) {
+async function unpinShortFromIpfs(short, address) {
   if (!short?.cid) return [];
-  await unpinCid(short.cid);
+  await unpinCid(short.cid, { address });
   return [short.cid];
 }
 
@@ -272,6 +271,7 @@ async function maybePublishRuling(shortId) {
   const rulingCid = await pinIfEnabled(payload, {
     name: `ruling:${short.cid}`,
     keyvalues: { kind: 'ruling', shortCid: short.cid, shortId: short.id },
+    address: m.resolvedFlagger || m.activeFlag?.flagger || short.creator,
   });
   if (rulingCid) {
     setModerationRulingCid(shortId, rulingCid);
@@ -326,11 +326,15 @@ export async function publishShort({ title, url, categories }) {
       if (isDemoMode()) {
         setStatus('pending', 'Demo mode: publishing for free…');
       }
-      cid = await pinIfEnabled(payload, pinOpts);
+      cid = await pinIfEnabled(payload, { ...pinOpts, paymentKind: 'free', address: from });
     } else {
-      // Pay before pinning — otherwise a cancelled payment still leaves a discoverable IPFS short.
-      await payCrc(PLATFORM_ORG, priceCrc, 'to publish', { cid: null });
-      cid = await pinIfEnabled(payload, pinOpts);
+      const txHashes = await payCrc(PLATFORM_ORG, priceCrc, 'to publish', { cid: null });
+      cid = await pinIfEnabled(payload, {
+        ...pinOpts,
+        txHashes,
+        paymentKind: 'paid',
+        address: from,
+      });
     }
 
     const short = addShort({
@@ -394,7 +398,7 @@ export async function updateUpload(shortId, { title, url, categories }) {
     const oldCid = existing.cid;
     let newCid = oldCid;
     if (isPinningEnabled()) {
-      const pinnedCid = await pinIfEnabled(payload, pinOpts);
+      const pinnedCid = await pinIfEnabled(payload, { ...pinOpts, address: from });
       if (pinnedCid) newCid = pinnedCid;
     }
 
@@ -407,7 +411,7 @@ export async function updateUpload(shortId, { title, url, categories }) {
       editedAt: Date.now(),
     });
     if (oldCid && newCid && oldCid !== newCid) {
-      void unpinShortFromIpfs({ cid: oldCid }).catch((err) => {
+      void unpinShortFromIpfs({ cid: oldCid }, from).catch((err) => {
         // eslint-disable-next-line no-console
         console.warn('IPFS unpin failed after edit', err);
       });
@@ -440,7 +444,7 @@ export async function deleteUpload(shortId) {
     setStatus('success', 'Short deleted.');
     setProfileTab('published');
     setView('profile', null, { profileAddress: from });
-    void unpinShortFromIpfs(short).catch((err) => {
+    void unpinShortFromIpfs(short, from).catch((err) => {
       // eslint-disable-next-line no-console
       console.warn('IPFS unpin failed', err);
     });
@@ -462,7 +466,7 @@ export async function withdrawFlag(shortId) {
     }
     refreshShorts();
     setStatus('success', 'Flag withdrawn. This short is no longer under review.');
-    void unpinCidsQuiet([flagCid, ...voteCids]).catch((err) => {
+    void unpinCidsQuiet([flagCid, ...voteCids], flagger).catch((err) => {
       // eslint-disable-next-line no-console
       console.warn('IPFS unpin failed for flag', err);
     });
@@ -486,8 +490,7 @@ export async function upvote(shortId) {
       throw new Error('Already upvoted');
     }
 
-    // Pay before pinning — otherwise a cancelled payment still leaves a discoverable IPFS upvote.
-    await payCrc(getAddress(short.creator), PRICE_INTERACT_CRC, 'to upvote', {
+    const txHashes = await payCrc(getAddress(short.creator), PRICE_INTERACT_CRC, 'to upvote', {
       cid: short.cid || null,
     });
 
@@ -502,6 +505,7 @@ export async function upvote(shortId) {
       v: 1,
       shortCid: short.cid || null,
       shortId: short.id,
+      creator: getAddress(short.creator),
       voter,
       createdAt: Date.now(),
     };
@@ -514,6 +518,9 @@ export async function upvote(shortId) {
           shortId: short.id,
           voter: voter.toLowerCase(),
         },
+        txHashes,
+        paymentKind: 'interact',
+        address: voter,
       });
     }
   } catch (err) {
@@ -578,6 +585,7 @@ export async function save(shortId) {
           shortId: short.id,
           saver: saver.toLowerCase(),
         },
+        address: saver,
       });
     }
   } catch (err) {
@@ -620,7 +628,7 @@ export async function comment(shortId, text) {
     }
     const cleanText = validateCommentText(text);
 
-    await payCrc(getAddress(short.creator), PRICE_INTERACT_CRC, 'to comment', {
+    const txHashes = await payCrc(getAddress(short.creator), PRICE_INTERACT_CRC, 'to comment', {
       cid: short.cid || null,
     });
 
@@ -633,6 +641,7 @@ export async function comment(shortId, text) {
       v: 1,
       shortCid: short.cid || null,
       shortId: short.id,
+      creator: getAddress(short.creator),
       author,
       text: cleanText,
       createdAt: comment.createdAt,
@@ -646,6 +655,9 @@ export async function comment(shortId, text) {
           shortId: short.id,
           author: author.toLowerCase(),
         },
+        txHashes,
+        paymentKind: 'interact',
+        address: author,
       }).then((cid) => {
         if (!cid) return;
         setCommentCid(shortId, comment.id, cid);
@@ -672,7 +684,7 @@ export async function deleteComment(shortId, commentId) {
     revokeComment(comment);
     refreshShorts();
     setStatus('success', 'Comment deleted.');
-    void unpinCommentFromIpfs(short, comment).catch((err) => {
+    void unpinCommentFromIpfs(short, comment, author).catch((err) => {
       // eslint-disable-next-line no-console
       console.warn('IPFS unpin failed', err);
     });
@@ -703,8 +715,7 @@ export async function flagShort(shortId, { category, explanation }) {
       createdAt: Date.now(),
     };
 
-    // Pay before pinning — otherwise a cancelled payment still leaves a discoverable IPFS flag.
-    await payCrc(PLATFORM_ORG, PRICE_FLAG_CRC, 'to flag', { cid: short.cid });
+    const txHashes = await payCrc(PLATFORM_ORG, PRICE_FLAG_CRC, 'to flag', { cid: short.cid });
     const flagCid = await pinIfEnabled(flagPayload, {
       name: `flag:${short.cid}`,
       keyvalues: {
@@ -713,6 +724,9 @@ export async function flagShort(shortId, { category, explanation }) {
         shortId: short.id,
         flagger: flagger.toLowerCase(),
       },
+      txHashes,
+      paymentKind: 'flag',
+      address: flagger,
     });
 
     addFlag(shortId, {
@@ -766,6 +780,7 @@ export async function voteModeration(shortId, verdict) {
         flagCid: flag.cid,
         voter: voter.toLowerCase(),
       },
+      address: voter,
     });
 
     addModerationVote(shortId, {

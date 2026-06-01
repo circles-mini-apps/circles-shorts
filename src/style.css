@@ -90,8 +90,20 @@ body {
   overflow: visible;
 }
 
+.notify-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 29;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: default;
+}
+
 .notify-btn {
   position: relative;
+  z-index: 31;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -145,10 +157,10 @@ body {
 }
 
 .notify-panel {
-  position: absolute;
-  top: calc(100% + 0.35rem);
-  right: 0;
-  width: min(22rem, calc(100vw - 1.5rem));
+  position: fixed;
+  top: calc(0.75rem + var(--topbar-action-size) + 0.35rem + env(safe-area-inset-top, 0px));
+  right: max(0.75rem, env(safe-area-inset-right, 0px));
+  width: min(22rem, calc(100vw - 1.5rem - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
   max-height: min(24rem, 70vh);
   overflow: auto;
   background: var(--bg-card);
@@ -1788,6 +1800,7 @@ code {
 @media (max-width: 480px) {
   .topbar {
     padding: 0.5rem 0.65rem;
+    padding-top: max(0.5rem, env(safe-area-inset-top, 0px));
   }
 
   .brand {
@@ -1813,6 +1826,25 @@ code {
 
   .topbar-right {
     --topbar-action-size: calc(1.5rem + 0.3rem);
+  }
+
+  .notify-panel {
+    top: 0;
+    right: 0;
+    left: 0;
+    bottom: 0;
+    width: auto;
+    max-height: none;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+    box-shadow: none;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .notify-panel-head {
+    padding-top: max(0.65rem, env(safe-area-inset-top, 0px));
   }
 
   .wallet-btn-label {

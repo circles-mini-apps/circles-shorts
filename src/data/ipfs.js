@@ -1,15 +1,31 @@
 /**
- * Pinata-backed IPFS module.
+ * IPFS module — reads via public gateways; writes via signed server API.
  *
- * - `pinJson(obj, { name, keyvalues })` → uploads JSON, returns the CID
- * - `fetchJsonByCid(cid)` → reads JSON from a gateway (cached per session)
- * - `listPinnedCids({ keyvalues })` → queries Pinata pinList to discover content
+ * Production: Pinata JWT lives only on the server (Cloudflare `PINATA_JWT` secret).
+ * Local dev: `lib/devIpfsMiddleware.js` proxies `/api/ipfs/*` using `.env` secrets.
  *
- * Pinata JWT is read from `VITE_PINATA_JWT`. Without it write/list call throws.
- * Reads (`fetchJsonByCid`) work without a JWT — only writes/discovery are gated.
+ * Set `VITE_IPFS_DIRECT=true` + `VITE_PINATA_JWT` only for one-off admin scripts (not production).
  */
 
-/** Same-origin proxy in dev avoids CSP / connection limits when embedded in the Circles host. */
+import { APP_NAMESPACE, LEGACY_APP_NAMESPACE } from '../app/config.js';
+import {
+  useServerIpfs,
+  isServerIpfsAvailable,
+  requestSignedPin,
+  requestSignedUnpin,
+  fetchPinListFromServer,
+} from './ipfsAuth.js';
+
+export { APP_NAMESPACE };
+
+function useDirectPinata() {
+  return import.meta.env.VITE_IPFS_DIRECT === 'true' && Boolean(import.meta.env.VITE_PINATA_JWT);
+}
+
+function jwt() {
+  return import.meta.env.VITE_PINATA_JWT || '';
+}
+
 function pinataBase() {
   return import.meta.env.DEV ? '/api/pinata' : 'https://api.pinata.cloud';
 }
@@ -26,14 +42,6 @@ function unpinEndpoint(cid) {
   return `${pinataBase()}/pinning/unpin/${encodeURIComponent(cid)}`;
 }
 
-import { APP_NAMESPACE, LEGACY_APP_NAMESPACE } from '../app/config.js';
-
-export { APP_NAMESPACE };
-
-function jwt() {
-  return import.meta.env.VITE_PINATA_JWT || '';
-}
-
 function gateways() {
   const custom = (import.meta.env.VITE_IPFS_GATEWAY || '').replace(/\/$/, '');
   const base = [
@@ -47,17 +55,38 @@ function gateways() {
 }
 
 export function isPinningEnabled() {
-  return Boolean(jwt());
+  return isServerIpfsAvailable();
 }
 
-/** Upload JSON to Pinata and return the CID. */
-export async function pinJson(content, { name = APP_NAMESPACE, keyvalues = {} } = {}) {
+/** Upload JSON and return the CID (server-signed or legacy direct Pinata). */
+export async function pinJson(
+  content,
+  {
+    name = APP_NAMESPACE,
+    keyvalues = {},
+    txHashes = [],
+    paymentKind = 'none',
+    address,
+  } = {},
+) {
+  if (useServerIpfs()) {
+    const cid = await requestSignedPin({
+      address,
+      content,
+      name,
+      keyvalues,
+      txHashes,
+      paymentKind,
+    });
+    invalidatePinListCache();
+    return cid;
+  }
+
   const token = jwt();
   if (!token) {
-    throw new Error('IPFS pinning is not configured (set VITE_PINATA_JWT)');
+    throw new Error('IPFS pinning is not configured (set VITE_PINATA_JWT or use server IPFS API)');
   }
   const taggedKeyvalues = { app: APP_NAMESPACE, ...keyvalues };
-  // Pinata keyvalues only accept primitive strings/numbers/booleans.
   const safeKeyvalues = Object.fromEntries(
     Object.entries(taggedKeyvalues)
       .filter(([, v]) => v != null)
@@ -94,17 +123,14 @@ export async function pinJson(content, { name = APP_NAMESPACE, keyvalues = {} } 
   return cid;
 }
 
-/**
- * Query Pinata's pinList endpoint and return matching pins.
- * `keyvalues` is matched as exact-equality filters.
- * Always scoped to `app=shorts` (and legacy `circles-shorts` via `listPinnedCidsAllNamespaces`).
- *
- * Returns: Array<{ cid, name, keyvalues, pinnedAt }>
- */
 export async function listPinnedCids({ keyvalues = {}, limit = 1000, appNamespace = APP_NAMESPACE } = {}) {
+  if (useServerIpfs()) {
+    return fetchPinListFromServer({ keyvalues, limit, appNamespace });
+  }
+
   const token = jwt();
   if (!token) {
-    throw new Error('IPFS pinning is not configured (set VITE_PINATA_JWT)');
+    throw new Error('IPFS pinning is not configured (set VITE_PINATA_JWT or use server IPFS API)');
   }
   const tagged = { app: appNamespace, ...keyvalues };
   const qvParts = Object.entries(tagged).map(
@@ -134,7 +160,6 @@ export async function listPinnedCids({ keyvalues = {}, limit = 1000, appNamespac
   }));
 }
 
-/** Query current and legacy app namespaces, deduped by CID. */
 export async function listPinnedCidsAllNamespaces(options = {}) {
   const [current, legacy] = await Promise.all([
     listPinnedCids({ ...options, appNamespace: APP_NAMESPACE }),
@@ -143,10 +168,6 @@ export async function listPinnedCidsAllNamespaces(options = {}) {
   return dedupePins([...current, ...legacy]);
 }
 
-/**
- * One pinList call per namespace (2 total), then filter by `keyvalues.kind` locally.
- * Avoids 14+ parallel pinList requests after the Shorts rename added legacy sync.
- */
 export async function listAllAppPins({ limit = 1000 } = {}) {
   const [current, legacy] = await Promise.all([
     listPinnedCids({ limit, appNamespace: APP_NAMESPACE }),
@@ -183,16 +204,22 @@ function dedupePins(pins) {
   return out;
 }
 
-/** Remove a pin from Pinata (stops discovery via pinList; content may linger on public gateways). */
-export async function unpinCid(cid, { invalidateCache = true } = {}) {
-  const token = jwt();
-  if (!token) {
-    throw new Error('IPFS pinning is not configured (set VITE_PINATA_JWT)');
-  }
+export async function unpinCid(cid, { invalidateCache = true, address } = {}) {
   if (!cid || typeof cid !== 'string') {
     throw new Error('CID required');
   }
   if (invalidateCache) invalidatePinListCache();
+
+  if (useServerIpfs()) {
+    await requestSignedUnpin({ address, cid });
+    clearCachedJson(cid);
+    return;
+  }
+
+  const token = jwt();
+  if (!token) {
+    throw new Error('IPFS pinning is not configured (set VITE_PINATA_JWT or use server IPFS API)');
+  }
   const res = await fetchWithRetry(unpinEndpoint(cid), {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${token}` },
@@ -209,7 +236,6 @@ export async function unpinCid(cid, { invalidateCache = true } = {}) {
   clearCachedJson(cid);
 }
 
-/** Find and unpin every pin matching `keyvalues` (current + legacy app namespaces). */
 export async function unpinMatchingPins({ keyvalues = {} } = {}) {
   const pins = await listPinnedCidsAllNamespaces({ keyvalues });
   const cids = dedupePins(pins).map((p) => p.cid);
@@ -217,10 +243,6 @@ export async function unpinMatchingPins({ keyvalues = {} } = {}) {
   return cids;
 }
 
-/**
- * Unpin upvote/save pins for a short + actor via targeted pinList filters
- * (small result sets; avoids loading every app pin).
- */
 export async function unpinInteractionPinsFast({
   kind,
   shortId,
@@ -228,7 +250,7 @@ export async function unpinInteractionPinsFast({
   actorKey,
   actor,
 }) {
-  if (!jwt() || !shortId || !actor || !actorKey) return [];
+  if (!isPinningEnabled() || !shortId || !actor || !actorKey) return [];
   const actorNorm = String(actor).toLowerCase();
   const keyvalueSets = new Map();
   const addQuery = (kv) => keyvalueSets.set(JSON.stringify(kv), kv);
@@ -246,16 +268,16 @@ export async function unpinInteractionPinsFast({
   );
 
   const cids = dedupePins(pinLists.flat()).map((p) => p.cid);
-  await unpinCids(cids);
+  await unpinCids(cids, { address: actor });
   return cids;
 }
 
-async function unpinCids(cids) {
+async function unpinCids(cids, { address } = {}) {
   if (!cids.length) return;
   await Promise.all(
     cids.map(async (cid) => {
       try {
-        await unpinCid(cid, { invalidateCache: false });
+        await unpinCid(cid, { invalidateCache: false, address });
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn('IPFS unpin failed for', cid, err);
@@ -323,7 +345,6 @@ function clearCachedJson(cid) {
   }
 }
 
-/** Fetch and parse JSON for a CID. Tries gateways in order, caches indefinitely. */
 export async function fetchJsonByCid(cid) {
   if (!cid || typeof cid !== 'string') throw new Error('CID required');
   const cached = readCachedJson(cid);
