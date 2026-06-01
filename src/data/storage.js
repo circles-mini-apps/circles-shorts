@@ -1,5 +1,5 @@
 import { moderationSnapshot } from './moderation.js';
-import { recordCidAlias, resolveShortForRemote, listAliasedCidsForShort } from './cidAliases.js';
+import { recordCidAlias, resolveShortForRemote, resolveShortIdFromCid, listAliasedCidsForShort } from './cidAliases.js';
 import { recordUserFlag, removeUserFlag, updateUserFlagShortCid } from './userFlags.js';
 
 const KEY = 'shorts:v1';
@@ -349,13 +349,19 @@ export function revokeComment(comment) {
 
 export function isShortRevoked(cidOrId) {
   if (!cidOrId) return false;
-  return readRevoked().shorts.includes(cidOrId);
+  const revoked = readRevoked();
+  if (revoked.shorts.includes(cidOrId)) return true;
+  const aliasedId = resolveShortIdFromCid(cidOrId);
+  return aliasedId ? revoked.shorts.includes(aliasedId) : false;
 }
 
 export function revokeShort(short) {
   if (!short) return;
   const revoked = readRevoked();
-  for (const key of [short.cid, short.id].filter(Boolean)) {
+  const keys = new Set(
+    [short.cid, short.id, ...listAliasedCidsForShort(short.id)].filter(Boolean),
+  );
+  for (const key of keys) {
     if (!revoked.shorts.includes(key)) revoked.shorts.push(key);
   }
   writeRevoked(revoked);

@@ -54,6 +54,7 @@ import {
   validateVideoUrl,
 } from '../utils/validation.js';
 import {
+  clearPendingDeleteShort,
   markFeedSynced,
   refreshShorts,
   resetAccountScopedState,
@@ -223,9 +224,11 @@ async function unpinCommentFromIpfs(_short, comment, address) {
 }
 
 async function unpinShortFromIpfs(short, address) {
-  if (!short?.cid) return [];
-  await unpinCid(short.cid, { address });
-  return [short.cid];
+  if (!short?.cid && !short?.id) return [];
+  const cids = [...new Set([short.cid, ...listAliasedCidsForShort(short.id)].filter(Boolean))];
+  if (!cids.length || !isPinningEnabled()) return [];
+  await unpinCidsQuiet(cids, address);
+  return cids;
 }
 
 function requireOwnShort(short, address) {
@@ -442,6 +445,7 @@ export async function deleteUpload(shortId) {
     removeShort(shortId);
     refreshShorts();
     state.editingShortId = null;
+    clearPendingDeleteShort();
     setStatus('success', 'Short deleted.');
     setProfileTab('published');
     setView('profile', null, { profileAddress: from });

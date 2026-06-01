@@ -115,6 +115,10 @@ export const state = {
   /** @type {string | null} */
   pendingWithdrawFlagId: null,
 
+  /** Edit view: short id awaiting delete confirmation. */
+  /** @type {string | null} */
+  pendingDeleteShortId: null,
+
   /** Leaderboard column sort (rankings view). */
   /** @type {'total' | 'uploaded' | 'liked' | 'saved' | 'commented' | 'spentCrc' | 'earnedCrc' | 'removed'} */
   leaderboardSort: 'earnedCrc',
@@ -261,6 +265,7 @@ function resetTransientUiState() {
   state.createCategoryOpen = false;
   state.notificationsOpen = false;
   state.pendingWithdrawFlagId = null;
+  state.pendingDeleteShortId = null;
 }
 
 export function goBack() {
@@ -534,6 +539,17 @@ export function setPendingWithdrawFlag(shortId) {
 export function clearPendingWithdrawFlag() {
   if (!state.pendingWithdrawFlagId) return;
   state.pendingWithdrawFlagId = null;
+  notify();
+}
+
+export function setPendingDeleteShort(shortId) {
+  state.pendingDeleteShortId = shortId || null;
+  notify();
+}
+
+export function clearPendingDeleteShort() {
+  if (!state.pendingDeleteShortId) return;
+  state.pendingDeleteShortId = null;
   notify();
 }
 

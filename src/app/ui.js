@@ -64,6 +64,8 @@ import {
   setNotificationsOpen,
   setPendingWithdrawFlag,
   clearPendingWithdrawFlag,
+  setPendingDeleteShort,
+  clearPendingDeleteShort,
   setProfileTab,
   setSearch,
   setSearchOpen,
@@ -1675,7 +1677,15 @@ function createView() {
   const heading = editing ? 'Edit short' : 'Publish a new short';
   const submitLabel = editing ? 'Save changes' : publishButtonLabel();
   const deleteBtn = editing
-    ? `<button class="btn btn--danger form-delete" type="button" data-action="delete-short" data-id="${escapeHtml(editingId)}">Delete</button>`
+    ? state.pendingDeleteShortId === editingId
+      ? `<div class="form-delete-confirm">
+          <p class="small muted">Delete this short permanently? This cannot be undone.</p>
+          <div class="actions-row">
+            <button class="btn btn--danger btn--sm" type="button" data-action="confirm-delete-short" data-id="${escapeHtml(editingId)}">Confirm delete</button>
+            <button class="btn btn--ghost btn--sm" type="button" data-action="cancel-delete-short">Cancel</button>
+          </div>
+        </div>`
+      : `<button class="btn btn--danger form-delete" type="button" data-action="delete-short" data-id="${escapeHtml(editingId)}">Delete</button>`
     : '';
 
   return `
@@ -2486,7 +2496,20 @@ function bindEvents() {
     el.addEventListener('click', () => {
       const id = el.dataset.id || state.editingShortId;
       if (!id) return;
-      if (!confirm('Delete this short permanently? This cannot be undone.')) return;
+      setPendingDeleteShort(id);
+    }),
+  );
+
+  app.querySelectorAll('[data-action="cancel-delete-short"]').forEach((el) =>
+    el.addEventListener('click', () => {
+      clearPendingDeleteShort();
+    }),
+  );
+
+  app.querySelectorAll('[data-action="confirm-delete-short"]').forEach((el) =>
+    el.addEventListener('click', () => {
+      const id = el.dataset.id || state.editingShortId;
+      if (!id) return;
       el.disabled = true;
       deleteUpload(id)
         .catch(() => {})
