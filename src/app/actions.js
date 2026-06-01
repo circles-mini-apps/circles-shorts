@@ -37,6 +37,7 @@ import { PLATFORM_ORG } from '../chain/platformOrg.js';
 import { isPinningEnabled, pinJson, unpinCid, unpinInteractionPinsFast, invalidatePinListCache } from '../data/ipfs.js';
 import { listAliasedCidsForShort } from '../data/cidAliases.js';
 import { refreshFeedFromRemote } from '../data/feed.js';
+import { remapCommentNotificationId } from '../data/notifications.js';
 import { resolveProfileDisplayName } from '../data/profiles.js';
 import { resolveVideoDuration } from '../data/videoDuration.js';
 import { MIN_MODERATION_VOTES, isShortUnderReview } from '../data/moderation.js';
@@ -661,6 +662,7 @@ export async function comment(shortId, text) {
       }).then((cid) => {
         if (!cid) return;
         setCommentCid(shortId, comment.id, cid);
+        remapCommentNotificationId(short.creator, shortId, comment.id, cid);
         refreshShorts();
       });
     }

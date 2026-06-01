@@ -3,6 +3,8 @@
  * and flaggers (edits on shorts they flagged).
  */
 
+import { listShorts } from './storage.js';
+
 const STORE_KEY = 'shorts:notifications:v1';
 const SEEN_KEY = 'shorts:notify-seen:v1';
 const FLAGGER_SEEN_KEY = 'shorts:notify-flagger-seen:v1';
@@ -96,11 +98,27 @@ function writeFlaggerSeen(address, snapshot) {
   }
 }
 
+/** @param {{ id?: string; cid?: string | null } | null | undefined} comment */
+function commentStableKey(comment) {
+  if (!comment) return null;
+  return comment.cid || comment.id || null;
+}
+
+/** All keys that identify the same comment across local id → IPFS cid migration. */
+function commentIdentityKeys(comments) {
+  const keys = [];
+  for (const comment of comments || []) {
+    if (comment.cid) keys.push(String(comment.cid));
+    if (comment.id) keys.push(String(comment.id));
+  }
+  return keys;
+}
+
 /** @param {import('./storage.js').listShorts extends () => infer R ? R[number] : never} short */
 function snapshotForShort(short) {
   const voters = (short.voters || []).map((v) => v.toLowerCase());
   const savers = (short.savers || []).map((v) => v.toLowerCase());
-  const commentIds = (short.comments || []).map((c) => c.id).filter(Boolean);
+  const commentIds = commentIdentityKeys(short.comments);
   const flagCid = short.moderation?.activeFlag?.cid || null;
   const moderationStatus = short.moderation?.status || 'none';
   const ruledAt = short.moderation?.ruledAt || null;
@@ -219,13 +237,17 @@ function diffShortNotifications(items, short, prev, creatorLower) {
     });
   }
 
-  const prevCommentIds = new Set(prev.commentIds);
+  const prevCommentIds = new Set(prev.commentIds || []);
   for (const comment of short.comments || []) {
-    if (!comment.id || prevCommentIds.has(comment.id)) continue;
+    const stableKey = commentStableKey(comment);
+    if (!stableKey) continue;
+    if (prevCommentIds.has(stableKey)) continue;
+    if (comment.id && prevCommentIds.has(comment.id)) continue;
+    if (comment.cid && prevCommentIds.has(comment.cid)) continue;
     if (comment.by?.toLowerCase() === creatorLower) continue;
     const preview = (comment.text || '').trim().slice(0, 80);
     items = prependNotification(items, {
-      id: `comment:${short.id}:${comment.id}`,
+      id: `comment:${short.id}:${stableKey}`,
       type: 'comment',
       shortId: short.id,
       shortTitle: title,
@@ -263,6 +285,34 @@ function appendFlagEditNotification(items, short, cur, prev) {
 function prependNotification(items, item) {
   if (items.some((n) => n.id === item.id)) return items;
   return [item, ...items].slice(0, MAX_ITEMS);
+}
+
+/** Align diff baselines with current shorts so feed sync after reload does not re-notify. */
+export function baselineNotificationSnapshots(address, shorts = listShorts()) {
+  const key = addrKey(address);
+  if (!key) return;
+  writeSeen(address, buildSnapshot(shorts, key));
+  writeFlaggerSeen(address, buildFlaggerSnapshot(shorts, key));
+}
+
+/** When a comment gets an IPFS cid, keep read state on the same inbox entry. */
+export function remapCommentNotificationId(address, shortId, localCommentId, cid) {
+  if (!address || !shortId || !localCommentId || !cid || localCommentId === cid) return;
+  const oldId = `comment:${shortId}:${localCommentId}`;
+  const newId = `comment:${shortId}:${cid}`;
+  const store = readStore(address);
+  let changed = false;
+  const itemIdx = store.items.findIndex((n) => n.id === oldId);
+  if (itemIdx >= 0) {
+    store.items[itemIdx] = { ...store.items[itemIdx], id: newId };
+    changed = true;
+  }
+  if (store.readIds.includes(oldId)) {
+    store.readIds = store.readIds.filter((id) => id !== oldId);
+    if (!store.readIds.includes(newId)) store.readIds.push(newId);
+    changed = true;
+  }
+  if (changed) writeStore(address, store);
 }
 
 /**
@@ -362,6 +412,7 @@ export function markAllNotificationsRead(address) {
   const allIds = store.items.map((n) => n.id);
   store.readIds = Array.from(new Set([...store.readIds, ...allIds]));
   writeStore(address, store);
+  baselineNotificationSnapshots(address);
 }
 
 export function isNotificationRead(address, id) {

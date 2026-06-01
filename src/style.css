@@ -9,6 +9,13 @@
   --muted: #64748b;
   --bg-card: #fff;
   --ring: rgba(109, 40, 217, 0.25);
+  --topbar-pad-block: 0.75rem;
+  --topbar-pad-inline: 1rem;
+  --topbar-action-size: calc(1.5rem + 0.4rem);
+  --topbar-offset: calc(
+    max(var(--topbar-pad-block), env(safe-area-inset-top, 0px)) + var(--topbar-action-size) +
+      var(--topbar-pad-block)
+  );
 }
 
 * {
@@ -31,12 +38,13 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  padding: 0.75rem 1rem;
+  padding: var(--topbar-pad-block) var(--topbar-pad-inline);
+  padding-top: max(var(--topbar-pad-block), env(safe-area-inset-top, 0px));
   background: #fff;
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: 32;
   flex-wrap: nowrap;
 }
 
@@ -92,7 +100,10 @@ body {
 
 .notify-backdrop {
   position: fixed;
-  inset: 0;
+  top: var(--topbar-offset);
+  right: 0;
+  bottom: 0;
+  left: 0;
   z-index: 29;
   margin: 0;
   padding: 0;
@@ -158,10 +169,10 @@ body {
 
 .notify-panel {
   position: fixed;
-  top: calc(0.75rem + var(--topbar-action-size) + 0.35rem + env(safe-area-inset-top, 0px));
-  right: max(0.75rem, env(safe-area-inset-right, 0px));
-  width: min(22rem, calc(100vw - 1.5rem - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
-  max-height: min(24rem, 70vh);
+  top: calc(var(--topbar-offset) + 0.35rem);
+  right: max(var(--topbar-pad-inline), env(safe-area-inset-right, 0px));
+  width: min(22rem, calc(100vw - 2 * var(--topbar-pad-inline) - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
+  max-height: min(24rem, calc(100vh - var(--topbar-offset) - 0.35rem - 1rem - env(safe-area-inset-bottom, 0px)));
   overflow: auto;
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -1798,9 +1809,10 @@ code {
 }
 
 @media (max-width: 480px) {
-  .topbar {
-    padding: 0.5rem 0.65rem;
-    padding-top: max(0.5rem, env(safe-area-inset-top, 0px));
+  :root {
+    --topbar-pad-block: 0.5rem;
+    --topbar-pad-inline: 0.65rem;
+    --topbar-action-size: calc(1.5rem + 0.3rem);
   }
 
   .brand {
@@ -1824,27 +1836,10 @@ code {
     max-width: none;
   }
 
-  .topbar-right {
-    --topbar-action-size: calc(1.5rem + 0.3rem);
-  }
-
   .notify-panel {
-    top: 0;
-    right: 0;
-    left: 0;
-    bottom: 0;
+    left: max(var(--topbar-pad-inline), env(safe-area-inset-left, 0px));
+    right: max(var(--topbar-pad-inline), env(safe-area-inset-right, 0px));
     width: auto;
-    max-height: none;
-    border-radius: 0;
-    border-left: none;
-    border-right: none;
-    border-bottom: none;
-    box-shadow: none;
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-  }
-
-  .notify-panel-head {
-    padding-top: max(0.65rem, env(safe-area-inset-top, 0px));
   }
 
   .wallet-btn-label {
