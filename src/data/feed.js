@@ -15,7 +15,9 @@ import {
   listAllAppPins,
 } from './ipfs.js';
 import { isContentKind } from '../app/config.js';
+import { recordCidAlias } from './cidAliases.js';
 import {
+  getShort,
   upsertRemoteComment,
   upsertRemoteShort,
   upsertRemoteUpvote,
@@ -26,6 +28,8 @@ import {
   upsertRemoteModVote,
   upsertRemoteRuling,
   reconcileAllModeration,
+  reconcilePendingUpvotes,
+  reconcilePendingSaves,
   isShortRevoked,
 } from './storage.js';
 
@@ -78,6 +82,29 @@ function isRulingContent(obj) {
   return isContentKind(obj, 'moderation-ruling') && typeof obj.outcome === 'string';
 }
 
+/** Map superseded short CIDs to stable short ids using all pinned short JSON versions. */
+function reconcileCidAliasesFromShortRecords(shortRecords) {
+  /** @type {Map<string, Set<string>>} */
+  const cidsByShortId = new Map();
+  for (const r of shortRecords) {
+    if (r.__error) continue;
+    const { pin, data } = r;
+    if (!isShortContent(data) || !data.shortId || !pin.cid) continue;
+    const set = cidsByShortId.get(data.shortId) || new Set();
+    set.add(pin.cid);
+    cidsByShortId.set(data.shortId, set);
+  }
+  for (const [shortId, cids] of cidsByShortId) {
+    const short = getShort(shortId);
+    const currentCid = short?.cid;
+    for (const cid of cids) {
+      if (cid && cid !== currentCid) {
+        recordCidAlias(cid, shortId);
+      }
+    }
+  }
+}
+
 /**
  * Load every short, comment, and upvote that has been pinned through this app
  * and merge them into local storage. Returns counts for diagnostics.
@@ -118,6 +145,9 @@ export async function refreshFeedFromRemote() {
     shortsAdded++;
   }
 
+  // Older short CIDs (from edits) still have upvote/save/comment pins keyed to them.
+  reconcileCidAliasesFromShortRecords(shortRecords);
+
   const commentPins = pinsByKind('comment');
   const upvotePins = pinsByKind('upvote');
   const savePins = pinsByKind('save');
@@ -138,6 +168,7 @@ export async function refreshFeedFromRemote() {
     if (!shortCid) continue;
     const out = upsertRemoteComment({
       shortCid,
+      shortId: data.shortId || pin.keyvalues?.shortId,
       commentCid: pin.cid,
       by: data.author,
       text: data.text,
@@ -150,21 +181,25 @@ export async function refreshFeedFromRemote() {
   resetAllUpvoteCounts();
   for (const pin of upvotePins) {
     const shortCid = pin.keyvalues?.shortCid;
+    const shortId = pin.keyvalues?.shortId;
     const voter = pin.keyvalues?.voter;
-    if (!shortCid || !voter) continue;
-    const out = upsertRemoteUpvote({ shortCid, voter });
+    if ((!shortCid && !shortId) || !voter) continue;
+    const out = upsertRemoteUpvote({ shortCid, shortId, voter });
     if (out) upvotesAdded++;
   }
+  reconcilePendingUpvotes(upvotePins);
 
   let savesAdded = 0;
   resetAllSaveCounts();
   for (const pin of savePins) {
     const shortCid = pin.keyvalues?.shortCid;
+    const shortId = pin.keyvalues?.shortId;
     const saver = pin.keyvalues?.saver;
-    if (!shortCid || !saver) continue;
-    const out = upsertRemoteSave({ shortCid, saver });
+    if ((!shortCid && !shortId) || !saver) continue;
+    const out = upsertRemoteSave({ shortCid, shortId, saver });
     if (out) savesAdded++;
   }
+  reconcilePendingSaves(savePins);
 
   const flagRecords = await pMap(flagPins, async (pin) => {
     const data = await fetchJsonByCid(pin.cid);
@@ -204,6 +239,7 @@ export async function refreshFeedFromRemote() {
     if (!shortCid || !flagCid) continue;
     const out = upsertRemoteModVote({
       shortCid,
+      shortId: data.shortId || pin.keyvalues?.shortId,
       voteCid: pin.cid,
       flagCid,
       voter: data.voter,
@@ -226,6 +262,7 @@ export async function refreshFeedFromRemote() {
     if (!shortCid) continue;
     const out = upsertRemoteRuling({
       shortCid,
+      shortId: data.shortId || pin.keyvalues?.shortId,
       rulingCid: pin.cid,
       outcome: data.outcome,
       flagger: data.flagger,

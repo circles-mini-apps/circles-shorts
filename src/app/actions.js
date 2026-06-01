@@ -4,6 +4,8 @@ import {
   addShort,
   addFlag,
   addModerationVote,
+  addPendingSave,
+  addPendingUpvote,
   commentShort,
   deleteCommentFromShort,
   finalizeModerationIfReady,
@@ -11,6 +13,8 @@ import {
   hasUpvoted,
   isSavedBy,
   removeShort,
+  removePendingSave,
+  removePendingUpvote,
   revokeComment,
   revokeFlag,
   revokeModVote,
@@ -18,6 +22,7 @@ import {
   revokeShort,
   revokeUpvoteForShort,
   saveShort,
+  setCommentCid,
   setModerationRulingCid,
   clearSaveRevoked,
   clearUpvoteRevoked,
@@ -29,7 +34,8 @@ import {
 } from '../data/storage.js';
 import { crcToAtto, isDemoMode, sendCrc } from '../chain/circlesTransfer.js';
 import { PLATFORM_ORG } from '../chain/platformOrg.js';
-import { isPinningEnabled, pinJson, unpinCid, unpinMatchingPins } from '../data/ipfs.js';
+import { isPinningEnabled, pinJson, unpinCid, unpinInteractionPinsFast, invalidatePinListCache } from '../data/ipfs.js';
+import { listAliasedCidsForShort } from '../data/cidAliases.js';
 import { refreshFeedFromRemote } from '../data/feed.js';
 import { resolveProfileDisplayName } from '../data/profiles.js';
 import { resolveVideoDuration } from '../data/videoDuration.js';
@@ -164,53 +170,62 @@ async function pinIfEnabled(payload, { name, keyvalues = {} }) {
   }
 }
 
-/** Unpin from Pinata so feed sync stops discovering the interaction globally. */
-async function unpinIfEnabled(task, message = 'Removing from IPFS…') {
-  if (!isPinningEnabled()) return [];
-  setStatus('pending', message);
-  return task();
+async function pinQuiet(payload, { name, keyvalues = {} }) {
+  if (!isPinningEnabled()) return null;
+  try {
+    return await pinJson(payload, { name, keyvalues });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('IPFS pinning failed', err);
+    return null;
+  }
 }
 
-async function unpinUpvoteFromIpfs(short, voter) {
-  if (!short?.cid) return [];
-  return unpinIfEnabled(() =>
-    unpinMatchingPins({
-      keyvalues: {
-        kind: 'upvote',
-        shortCid: short.cid,
-        voter: voter.toLowerCase(),
-      },
-    }),
-  );
-}
-
-async function unpinSaveFromIpfs(short, saver) {
-  if (!short?.cid) return [];
-  return unpinIfEnabled(() =>
-    unpinMatchingPins({
-      keyvalues: {
-        kind: 'save',
-        shortCid: short.cid,
-        saver: saver.toLowerCase(),
-      },
-    }),
-  );
-}
-
-async function unpinCommentFromIpfs(short, comment) {
-  if (!short?.cid || !comment?.cid) return [];
-  return unpinIfEnabled(async () => {
-    await unpinCid(comment.cid);
-    return [comment.cid];
+async function unpinInteractionPins({ kind, short, actorKey, actor }) {
+  if (!isPinningEnabled() || !short?.id || !actor) return [];
+  return unpinInteractionPinsFast({
+    kind,
+    shortId: short.id,
+    shortCids: [short.cid, ...listAliasedCidsForShort(short.id)].filter(Boolean),
+    actorKey,
+    actor,
   });
 }
 
-async function unpinShortFromIpfs(short, { message } = {}) {
+async function unpinUpvoteFromIpfs(short, voter) {
+  return unpinInteractionPins({ kind: 'upvote', short, actorKey: 'voter', actor: voter });
+}
+
+async function unpinSaveFromIpfs(short, saver) {
+  return unpinInteractionPins({ kind: 'save', short, actorKey: 'saver', actor: saver });
+}
+
+async function unpinCidsQuiet(cids) {
+  const list = [...new Set((cids || []).filter((c) => c && !String(c).startsWith('local-')))];
+  if (!list.length || !isPinningEnabled()) return;
+  await Promise.all(
+    list.map(async (cid) => {
+      try {
+        await unpinCid(cid, { invalidateCache: false });
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('IPFS unpin failed for', cid, err);
+      }
+    }),
+  );
+  invalidatePinListCache();
+}
+
+async function unpinCommentFromIpfs(_short, comment) {
+  if (!comment?.cid) return [];
+  await unpinCidsQuiet([comment.cid]);
+  return [comment.cid];
+}
+
+async function unpinShortFromIpfs(short) {
   if (!short?.cid) return [];
-  return unpinIfEnabled(async () => {
-    await unpinCid(short.cid);
-    return [short.cid];
-  }, message);
+  await unpinCid(short.cid);
+  return [short.cid];
 }
 
 function requireOwnShort(short, address) {
@@ -247,6 +262,7 @@ async function maybePublishRuling(shortId) {
     kind: contentKind('moderation-ruling'),
     v: 1,
     shortCid: short.cid,
+    shortId: short.id,
     flagCid: m.activeFlag?.cid || null,
     outcome: m.status === 'violated' ? 'violation' : 'clear',
     flagger: m.resolvedFlagger || m.activeFlag?.flagger || null,
@@ -255,7 +271,7 @@ async function maybePublishRuling(shortId) {
   };
   const rulingCid = await pinIfEnabled(payload, {
     name: `ruling:${short.cid}`,
-    keyvalues: { kind: 'ruling', shortCid: short.cid },
+    keyvalues: { kind: 'ruling', shortCid: short.cid, shortId: short.id },
   });
   if (rulingCid) {
     setModerationRulingCid(shortId, rulingCid);
@@ -379,17 +395,7 @@ export async function updateUpload(shortId, { title, url, categories }) {
     let newCid = oldCid;
     if (isPinningEnabled()) {
       const pinnedCid = await pinIfEnabled(payload, pinOpts);
-      if (pinnedCid) {
-        newCid = pinnedCid;
-        if (oldCid && oldCid !== newCid) {
-          try {
-            await unpinShortFromIpfs({ cid: oldCid }, { message: 'Removing old IPFS pin…' });
-          } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn('IPFS unpin failed after edit', err);
-          }
-        }
-      }
+      if (pinnedCid) newCid = pinnedCid;
     }
 
     updateShort(shortId, {
@@ -400,6 +406,12 @@ export async function updateUpload(shortId, { title, url, categories }) {
       cid: newCid,
       editedAt: Date.now(),
     });
+    if (oldCid && newCid && oldCid !== newCid) {
+      void unpinShortFromIpfs({ cid: oldCid }).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn('IPFS unpin failed after edit', err);
+      });
+    }
     refreshShorts();
     state.editingShortId = null;
     const wasFlagged = isShortUnderReview(existing);
@@ -421,13 +433,6 @@ export async function deleteUpload(shortId) {
   try {
     const from = requireConnected();
     const short = requireOwnShort(getShort(shortId), from);
-    try {
-      await unpinShortFromIpfs(short);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn('IPFS unpin failed', err);
-      setStatus('pending', 'Removed locally; IPFS unpin failed — may still show for others.');
-    }
     revokeShort(short);
     removeShort(shortId);
     refreshShorts();
@@ -435,18 +440,14 @@ export async function deleteUpload(shortId) {
     setStatus('success', 'Short deleted.');
     setProfileTab('published');
     setView('profile', null, { profileAddress: from });
+    void unpinShortFromIpfs(short).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn('IPFS unpin failed', err);
+    });
   } catch (err) {
     setStatus('error', normalizeError(err));
     throw err;
   }
-}
-
-async function unpinFlagFromIpfs(flagCid) {
-  if (!flagCid || flagCid.startsWith('local-')) return [];
-  return unpinIfEnabled(async () => {
-    await unpinCid(flagCid);
-    return [flagCid];
-  });
 }
 
 export async function withdrawFlag(shortId) {
@@ -455,29 +456,16 @@ export async function withdrawFlag(shortId) {
     const short = getShort(shortId);
     if (!short) throw new Error('Short not found');
     const { flagCid, voteCids } = withdrawFlagFromShort(shortId, flagger);
-    try {
-      await unpinFlagFromIpfs(flagCid);
-      for (const voteCid of voteCids) {
-        if (!voteCid || voteCid.startsWith('local-')) continue;
-        try {
-          await unpinIfEnabled(async () => {
-            await unpinCid(voteCid);
-            return [voteCid];
-          });
-        } catch (err) {
-          // eslint-disable-next-line no-console
-          console.warn('IPFS unpin failed for mod vote', err);
-        }
-        revokeModVote(voteCid);
-      }
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn('IPFS unpin failed for flag', err);
-      setStatus('pending', 'Flag withdrawn locally; IPFS unpin failed — may still show for others.');
-    }
     if (flagCid) revokeFlag(flagCid);
+    for (const voteCid of voteCids) {
+      if (voteCid) revokeModVote(voteCid);
+    }
     refreshShorts();
     setStatus('success', 'Flag withdrawn. This short is no longer under review.');
+    void unpinCidsQuiet([flagCid, ...voteCids]).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn('IPFS unpin failed for flag', err);
+    });
     return getShort(shortId);
   } catch (err) {
     setStatus('error', normalizeError(err));
@@ -503,24 +491,31 @@ export async function upvote(shortId) {
       cid: short.cid || null,
     });
 
+    upvoteShort(shortId, voter);
+    addPendingUpvote(shortId, voter);
+    clearUpvoteRevoked(getShort(shortId), voter);
+    refreshShorts();
+    setStatus('success', 'Upvoted.');
+
     const upvotePayload = {
       kind: contentKind('upvote'),
       v: 1,
       shortCid: short.cid || null,
+      shortId: short.id,
       voter,
       createdAt: Date.now(),
     };
     if (short.cid) {
-      await pinIfEnabled(upvotePayload, {
+      void pinQuiet(upvotePayload, {
         name: `upvote:${short.cid}`,
-        keyvalues: { kind: 'upvote', shortCid: short.cid, voter: voter.toLowerCase() },
+        keyvalues: {
+          kind: 'upvote',
+          shortCid: short.cid,
+          shortId: short.id,
+          voter: voter.toLowerCase(),
+        },
       });
     }
-
-    upvoteShort(shortId, voter);
-    clearUpvoteRevoked(getShort(shortId), voter);
-    refreshShorts();
-    setStatus('success', 'Upvoted.');
   } catch (err) {
     setStatus('error', normalizeError(err));
     throw err;
@@ -535,17 +530,15 @@ export async function unupvote(shortId) {
     if (!hasUpvoted(short, voter)) {
       throw new Error('Not upvoted');
     }
-    try {
-      await unpinUpvoteFromIpfs(short, voter);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn('IPFS unpin failed', err);
-      setStatus('pending', 'Removed locally; IPFS unpin failed — may still show for others.');
-    }
     unupvoteShort(shortId, voter);
+    removePendingUpvote(shortId, voter);
     revokeUpvoteForShort(short, voter);
     refreshShorts();
     setStatus('success', 'Upvote removed.');
+    void unpinUpvoteFromIpfs(short, voter).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn('IPFS unpin failed', err);
+    });
   } catch (err) {
     setStatus('error', normalizeError(err));
     throw err;
@@ -563,24 +556,30 @@ export async function save(shortId) {
     }
 
     saveShort(shortId, saver);
+    addPendingSave(shortId, saver);
     clearSaveRevoked(getShort(shortId), saver);
+    refreshShorts();
+    setStatus('success', 'Saved.');
 
     const savePayload = {
       kind: contentKind('save'),
       v: 1,
       shortCid: short.cid || null,
+      shortId: short.id,
       saver,
       createdAt: Date.now(),
     };
     if (short.cid) {
-      await pinIfEnabled(savePayload, {
+      void pinQuiet(savePayload, {
         name: `save:${short.cid}`,
-        keyvalues: { kind: 'save', shortCid: short.cid, saver: saver.toLowerCase() },
+        keyvalues: {
+          kind: 'save',
+          shortCid: short.cid,
+          shortId: short.id,
+          saver: saver.toLowerCase(),
+        },
       });
     }
-
-    refreshShorts();
-    setStatus('success', 'Saved.');
   } catch (err) {
     setStatus('error', normalizeError(err));
     throw err;
@@ -595,17 +594,15 @@ export async function unsave(shortId) {
     if (!isSavedBy(short, saver)) {
       throw new Error('Not saved');
     }
-    try {
-      await unpinSaveFromIpfs(short, saver);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn('IPFS unpin failed', err);
-      setStatus('pending', 'Removed locally; IPFS unpin failed — may still show for others.');
-    }
     unsaveShort(shortId, saver);
+    removePendingSave(shortId, saver);
     revokeSaveForShort(short, saver);
     refreshShorts();
     setStatus('success', 'Removed from saved.');
+    void unpinSaveFromIpfs(short, saver).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn('IPFS unpin failed', err);
+    });
   } catch (err) {
     setStatus('error', normalizeError(err));
     throw err;
@@ -627,6 +624,10 @@ export async function comment(shortId, text) {
       cid: short.cid || null,
     });
 
+    const { comment } = commentShort(shortId, { by: author, text: cleanText, cid: null });
+    refreshShorts();
+    setStatus('success', 'Comment posted.');
+
     const payload = {
       kind: contentKind('comment'),
       v: 1,
@@ -634,18 +635,23 @@ export async function comment(shortId, text) {
       shortId: short.id,
       author,
       text: cleanText,
-      createdAt: Date.now(),
+      createdAt: comment.createdAt,
     };
-    const cid = short.cid
-      ? await pinIfEnabled(payload, {
-          name: `comment:${short.cid}`,
-          keyvalues: { kind: 'comment', shortCid: short.cid, author: author.toLowerCase() },
-        })
-      : null;
-
-    commentShort(shortId, { by: author, text: cleanText, cid });
-    refreshShorts();
-    setStatus('success', 'Comment posted.');
+    if (short.cid) {
+      void pinQuiet(payload, {
+        name: `comment:${short.cid}`,
+        keyvalues: {
+          kind: 'comment',
+          shortCid: short.cid,
+          shortId: short.id,
+          author: author.toLowerCase(),
+        },
+      }).then((cid) => {
+        if (!cid) return;
+        setCommentCid(shortId, comment.id, cid);
+        refreshShorts();
+      });
+    }
   } catch (err) {
     setStatus('error', normalizeError(err));
     throw err;
@@ -662,17 +668,14 @@ export async function deleteComment(shortId, commentId) {
     if (comment.by?.toLowerCase() !== author.toLowerCase()) {
       throw new Error('You can only delete your own comments');
     }
-    try {
-      await unpinCommentFromIpfs(short, comment);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn('IPFS unpin failed', err);
-      setStatus('pending', 'Removed locally; IPFS unpin failed — may still show for others.');
-    }
     deleteCommentFromShort(shortId, commentId);
     revokeComment(comment);
     refreshShorts();
     setStatus('success', 'Comment deleted.');
+    void unpinCommentFromIpfs(short, comment).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn('IPFS unpin failed', err);
+    });
   } catch (err) {
     setStatus('error', normalizeError(err));
     throw err;
@@ -704,7 +707,12 @@ export async function flagShort(shortId, { category, explanation }) {
     await payCrc(PLATFORM_ORG, PRICE_FLAG_CRC, 'to flag', { cid: short.cid });
     const flagCid = await pinIfEnabled(flagPayload, {
       name: `flag:${short.cid}`,
-      keyvalues: { kind: 'flag', shortCid: short.cid, flagger: flagger.toLowerCase() },
+      keyvalues: {
+        kind: 'flag',
+        shortCid: short.cid,
+        shortId: short.id,
+        flagger: flagger.toLowerCase(),
+      },
     });
 
     addFlag(shortId, {
@@ -743,6 +751,7 @@ export async function voteModeration(shortId, verdict) {
       kind: contentKind('moderation-vote'),
       v: 1,
       shortCid: short.cid,
+      shortId: short.id,
       flagCid: flag.cid,
       voter,
       verdict,
@@ -753,6 +762,7 @@ export async function voteModeration(shortId, verdict) {
       keyvalues: {
         kind: 'mod-vote',
         shortCid: short.cid,
+        shortId: short.id,
         flagCid: flag.cid,
         voter: voter.toLowerCase(),
       },

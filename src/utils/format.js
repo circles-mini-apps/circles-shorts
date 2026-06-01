@@ -40,6 +40,13 @@ export function shortAddress(addr) {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
+/** Truncate visible text to a max character count (adds … when shortened). */
+export function truncateText(text, maxLen) {
+  const s = String(text ?? '');
+  if (maxLen <= 0 || s.length <= maxLen) return s;
+  return `${s.slice(0, maxLen)}…`;
+}
+
 export function timeAgo(ms) {
   const diff = Date.now() - ms;
   if (diff < 60_000) return 'just now';

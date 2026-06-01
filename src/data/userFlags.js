@@ -74,6 +74,23 @@ export function userFlaggedShortIds(address) {
   return new Set(userFlagEntries(address).map((e) => e.shortId).filter(Boolean));
 }
 
+export function updateUserFlagShortCid(shortId, shortCid) {
+  if (!shortId || !shortCid) return;
+  const all = readAll();
+  let changed = false;
+  for (const key of Object.keys(all)) {
+    const list = all[key];
+    if (!Array.isArray(list)) continue;
+    for (const entry of list) {
+      if (entry.shortId === shortId && entry.shortCid !== shortCid) {
+        entry.shortCid = shortCid;
+        changed = true;
+      }
+    }
+  }
+  if (changed) writeAll(all);
+}
+
 /** Backfill index from moderation state (one-time repair for existing flags). */
 export function syncUserFlagsFromShorts(address, shorts) {
   const me = addrKey(address);

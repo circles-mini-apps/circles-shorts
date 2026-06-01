@@ -90,6 +90,7 @@ export async function pinJson(content, { name = APP_NAMESPACE, keyvalues = {} } 
   if (!cid || typeof cid !== 'string') {
     throw new Error('Pinata returned no CID');
   }
+  invalidatePinListCache();
   return cid;
 }
 
@@ -154,6 +155,23 @@ export async function listAllAppPins({ limit = 1000 } = {}) {
   return dedupePins([...current, ...legacy]);
 }
 
+let allPinsCache = null;
+let allPinsCacheAt = 0;
+const PINS_CACHE_MS = 30_000;
+
+export async function listAllAppPinsCached({ limit = 1000, maxAgeMs = PINS_CACHE_MS } = {}) {
+  const now = Date.now();
+  if (allPinsCache && now - allPinsCacheAt < maxAgeMs) return allPinsCache;
+  allPinsCache = await listAllAppPins({ limit });
+  allPinsCacheAt = now;
+  return allPinsCache;
+}
+
+export function invalidatePinListCache() {
+  allPinsCache = null;
+  allPinsCacheAt = 0;
+}
+
 function dedupePins(pins) {
   const seen = new Set();
   const out = [];
@@ -166,7 +184,7 @@ function dedupePins(pins) {
 }
 
 /** Remove a pin from Pinata (stops discovery via pinList; content may linger on public gateways). */
-export async function unpinCid(cid) {
+export async function unpinCid(cid, { invalidateCache = true } = {}) {
   const token = jwt();
   if (!token) {
     throw new Error('IPFS pinning is not configured (set VITE_PINATA_JWT)');
@@ -174,6 +192,7 @@ export async function unpinCid(cid) {
   if (!cid || typeof cid !== 'string') {
     throw new Error('CID required');
   }
+  if (invalidateCache) invalidatePinListCache();
   const res = await fetchWithRetry(unpinEndpoint(cid), {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${token}` },
@@ -194,10 +213,56 @@ export async function unpinCid(cid) {
 export async function unpinMatchingPins({ keyvalues = {} } = {}) {
   const pins = await listPinnedCidsAllNamespaces({ keyvalues });
   const cids = dedupePins(pins).map((p) => p.cid);
-  for (const cid of cids) {
-    await unpinCid(cid);
-  }
+  await unpinCids(cids);
   return cids;
+}
+
+/**
+ * Unpin upvote/save pins for a short + actor via targeted pinList filters
+ * (small result sets; avoids loading every app pin).
+ */
+export async function unpinInteractionPinsFast({
+  kind,
+  shortId,
+  shortCids = [],
+  actorKey,
+  actor,
+}) {
+  if (!jwt() || !shortId || !actor || !actorKey) return [];
+  const actorNorm = String(actor).toLowerCase();
+  const keyvalueSets = new Map();
+  const addQuery = (kv) => keyvalueSets.set(JSON.stringify(kv), kv);
+
+  addQuery({ kind, shortId, [actorKey]: actorNorm });
+  for (const shortCid of shortCids.filter(Boolean)) {
+    addQuery({ kind, shortCid, [actorKey]: actorNorm });
+  }
+
+  const pinLists = await Promise.all(
+    [...keyvalueSets.values()].flatMap((keyvalues) => [
+      listPinnedCids({ keyvalues, appNamespace: APP_NAMESPACE }),
+      listPinnedCids({ keyvalues, appNamespace: LEGACY_APP_NAMESPACE }),
+    ]),
+  );
+
+  const cids = dedupePins(pinLists.flat()).map((p) => p.cid);
+  await unpinCids(cids);
+  return cids;
+}
+
+async function unpinCids(cids) {
+  if (!cids.length) return;
+  await Promise.all(
+    cids.map(async (cid) => {
+      try {
+        await unpinCid(cid, { invalidateCache: false });
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('IPFS unpin failed for', cid, err);
+      }
+    }),
+  );
+  invalidatePinListCache();
 }
 
 async function fetchWithRetry(url, options, retries = 2) {

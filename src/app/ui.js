@@ -83,6 +83,7 @@ import {
   escapeHtml,
   shortAddress,
   timeAgo,
+  truncateText,
 } from '../utils/format.js';
 import { formatDuration } from '../utils/duration.js';
 import { limits } from '../utils/validation.js';
@@ -1781,7 +1782,8 @@ function leaderboardView() {
       : rows
           .map((row, i) => {
             const rank = i + 1;
-            const name = profileNameFor(row.address) || shortAddress(row.address);
+            const fullName = profileNameFor(row.address) || shortAddress(row.address);
+            const name = truncateText(fullName, 12);
             const isMe = isOwnProfileAddress(row.address);
             return `
               <div class="${leaderboardRowClass(isMe)}">
@@ -1793,14 +1795,14 @@ function leaderboardView() {
                     data-action="go-user-profile"
                     data-address="${escapeHtml(row.address)}"
                     title="View profile"
-                    aria-label="View ${escapeHtml(name)} profile"
+                    aria-label="View ${escapeHtml(fullName)} profile"
                   >${leaderboardUserAvatar(row.address)}</button>
                   <button
                     type="button"
                     class="profile-link leaderboard-name"
                     data-action="go-user-profile"
                     data-address="${escapeHtml(row.address)}"
-                    title="${escapeHtml(row.address)}"
+                    title="${escapeHtml(fullName)}"
                   >${escapeHtml(name)}</button>
                   ${LEADERBOARD_COLUMNS.map((col) => leaderboardStatHtml(row, col, sortKey)).join('')}
                 </div>
@@ -1819,7 +1821,7 @@ function leaderboardView() {
       ${rows.length ? `<p class="leaderboard-meta">${escapeHtml(userCountLabel)}</p>` : ''}
       ${
         rows.length
-          ? `<div class="leaderboard-table-wrap">${header}<div class="leaderboard-list">${list}</div></div>`
+          ? `<div class="leaderboard-table-wrap"><div class="leaderboard-table-inner">${header}<div class="leaderboard-list">${list}</div></div></div>`
           : `<div class="leaderboard-list">${list}</div>`
       }
     </section>

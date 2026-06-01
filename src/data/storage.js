@@ -1,5 +1,6 @@
 import { moderationSnapshot } from './moderation.js';
-import { recordUserFlag, removeUserFlag } from './userFlags.js';
+import { recordCidAlias, resolveShortForRemote, listAliasedCidsForShort } from './cidAliases.js';
+import { recordUserFlag, removeUserFlag, updateUserFlagShortCid } from './userFlags.js';
 
 const KEY = 'shorts:v1';
 const LEGACY_KEY = 'circles-shorts:v1';
@@ -100,7 +101,14 @@ export function updateShort(
       delete short.durationSeconds;
     }
   }
-  if (cid !== undefined) short.cid = cid;
+  if (cid !== undefined) {
+    const prevCid = short.cid;
+    if (prevCid && cid && prevCid !== cid) {
+      recordCidAlias(prevCid, id);
+      updateUserFlagShortCid(id, cid);
+    }
+    short.cid = cid;
+  }
   if (editedAt !== undefined) short.editedAt = editedAt;
   write(state);
   return short;
@@ -204,6 +212,18 @@ export function commentShort(id, { by, text, cid = null }) {
   return { short, comment };
 }
 
+export function setCommentCid(shortId, commentId, cid) {
+  if (!cid) return null;
+  const state = read();
+  const short = state.shorts.find((s) => s.id === shortId);
+  if (!short) return null;
+  const comment = (short.comments || []).find((c) => c.id === commentId);
+  if (!comment) return null;
+  comment.cid = cid;
+  write(state);
+  return comment;
+}
+
 export function deleteCommentFromShort(shortId, commentId) {
   const state = read();
   const short = state.shorts.find((s) => s.id === shortId);
@@ -249,6 +269,52 @@ function interactionKey(scope, actor) {
   return `${String(scope).toLowerCase()}:${String(actor).toLowerCase()}`;
 }
 
+function interactionScopesForShort(short) {
+  if (!short) return [];
+  const scopes = new Set();
+  if (short.id) scopes.add(short.id);
+  if (short.cid) scopes.add(short.cid);
+  for (const cid of listAliasedCidsForShort(short.id)) scopes.add(cid);
+  return [...scopes];
+}
+
+function isInteractionRevoked(scopes, actor, list) {
+  if (!actor) return false;
+  for (const scope of scopes) {
+    if (list.includes(interactionKey(scope, actor))) return true;
+  }
+  return false;
+}
+
+function addInteractionRevoked(scopes, actor, listKey) {
+  if (!actor) return;
+  const revoked = readRevoked();
+  const list = revoked[listKey];
+  for (const scope of scopes) {
+    const key = interactionKey(scope, actor);
+    if (!list.includes(key)) list.push(key);
+  }
+  writeRevoked(revoked);
+}
+
+function removeInteractionRevoked(scopes, actor, listKey) {
+  if (!actor) return;
+  const revoked = readRevoked();
+  const keys = new Set(scopes.map((s) => interactionKey(s, actor)));
+  const next = revoked[listKey].filter((k) => !keys.has(k));
+  if (next.length === revoked[listKey].length) return;
+  revoked[listKey] = next;
+  writeRevoked(revoked);
+}
+
+export function isUpvoteRevokedForShort(short, voter) {
+  return isInteractionRevoked(interactionScopesForShort(short), voter, readRevoked().upvotes);
+}
+
+export function isSaveRevokedForShort(short, saver) {
+  return isInteractionRevoked(interactionScopesForShort(short), saver, readRevoked().saves);
+}
+
 export function isUpvoteRevoked(shortCidOrId, voter) {
   if (!shortCidOrId || !voter) return false;
   return readRevoked().upvotes.includes(interactionKey(shortCidOrId, voter));
@@ -265,23 +331,11 @@ export function isCommentRevoked(commentCidOrId) {
 }
 
 export function revokeUpvoteForShort(short, voter) {
-  const scope = short?.cid || short?.id;
-  if (!scope || !voter) return;
-  const key = interactionKey(scope, voter);
-  const revoked = readRevoked();
-  if (revoked.upvotes.includes(key)) return;
-  revoked.upvotes.push(key);
-  writeRevoked(revoked);
+  addInteractionRevoked(interactionScopesForShort(short), voter, 'upvotes');
 }
 
 export function revokeSaveForShort(short, saver) {
-  const scope = short?.cid || short?.id;
-  if (!scope || !saver) return;
-  const key = interactionKey(scope, saver);
-  const revoked = readRevoked();
-  if (revoked.saves.includes(key)) return;
-  revoked.saves.push(key);
-  writeRevoked(revoked);
+  addInteractionRevoked(interactionScopesForShort(short), saver, 'saves');
 }
 
 export function revokeComment(comment) {
@@ -330,25 +384,147 @@ export function revokeModVote(voteCid) {
 }
 
 export function clearUpvoteRevoked(short, voter) {
-  const scope = short?.cid || short?.id;
-  if (!scope || !voter) return;
-  const key = interactionKey(scope, voter);
-  const revoked = readRevoked();
-  const next = revoked.upvotes.filter((k) => k !== key);
-  if (next.length === revoked.upvotes.length) return;
-  revoked.upvotes = next;
-  writeRevoked(revoked);
+  removeInteractionRevoked(interactionScopesForShort(short), voter, 'upvotes');
 }
 
 export function clearSaveRevoked(short, saver) {
-  const scope = short?.cid || short?.id;
-  if (!scope || !saver) return;
-  const key = interactionKey(scope, saver);
-  const revoked = readRevoked();
-  const next = revoked.saves.filter((k) => k !== key);
-  if (next.length === revoked.saves.length) return;
-  revoked.saves = next;
-  writeRevoked(revoked);
+  removeInteractionRevoked(interactionScopesForShort(short), saver, 'saves');
+}
+
+const PENDING_KEY = 'shorts:pending:v1';
+
+function readPending() {
+  if (typeof localStorage === 'undefined') return { upvotes: [], saves: [] };
+  try {
+    const raw = localStorage.getItem(PENDING_KEY);
+    if (!raw) return { upvotes: [], saves: [] };
+    const parsed = JSON.parse(raw);
+    return {
+      upvotes: Array.isArray(parsed.upvotes) ? parsed.upvotes : [],
+      saves: Array.isArray(parsed.saves) ? parsed.saves : [],
+    };
+  } catch {
+    return { upvotes: [], saves: [] };
+  }
+}
+
+function writePending(data) {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(PENDING_KEY, JSON.stringify(data));
+  } catch {
+    /* ignore quota */
+  }
+}
+
+function pendingActorKey(shortId, actor) {
+  return `${shortId}:${String(actor).toLowerCase()}`;
+}
+
+export function addPendingUpvote(shortId, voter) {
+  if (!shortId || !voter) return;
+  const pending = readPending();
+  const key = pendingActorKey(shortId, voter);
+  if (pending.upvotes.some((e) => pendingActorKey(e.shortId, e.voter) === key)) return;
+  pending.upvotes.push({ shortId, voter });
+  writePending(pending);
+}
+
+export function removePendingUpvote(shortId, voter) {
+  if (!shortId || !voter) return;
+  const pending = readPending();
+  const key = pendingActorKey(shortId, voter);
+  const next = pending.upvotes.filter((e) => pendingActorKey(e.shortId, e.voter) !== key);
+  if (next.length === pending.upvotes.length) return;
+  pending.upvotes = next;
+  writePending(pending);
+}
+
+export function addPendingSave(shortId, saver) {
+  if (!shortId || !saver) return;
+  const pending = readPending();
+  const key = pendingActorKey(shortId, saver);
+  if (pending.saves.some((e) => pendingActorKey(e.shortId, e.saver) === key)) return;
+  pending.saves.push({ shortId, saver });
+  writePending(pending);
+}
+
+export function removePendingSave(shortId, saver) {
+  if (!shortId || !saver) return;
+  const pending = readPending();
+  const key = pendingActorKey(shortId, saver);
+  const next = pending.saves.filter((e) => pendingActorKey(e.shortId, e.saver) !== key);
+  if (next.length === pending.saves.length) return;
+  pending.saves = next;
+  writePending(pending);
+}
+
+function shortCidScopes(short) {
+  const scopes = new Set(listAliasedCidsForShort(short.id));
+  if (short.cid) scopes.add(short.cid);
+  return scopes;
+}
+
+function upvotePinMatches(upvotePins, short, voter) {
+  const v = voter.toLowerCase();
+  const cidScopes = shortCidScopes(short);
+  for (const pin of upvotePins) {
+    if (String(pin.keyvalues?.voter || '').toLowerCase() !== v) continue;
+    if (pin.keyvalues?.shortId === short.id) return true;
+    const sc = pin.keyvalues?.shortCid;
+    if (sc && cidScopes.has(sc)) return true;
+  }
+  return false;
+}
+
+function savePinMatches(savePins, short, saver) {
+  const s = saver.toLowerCase();
+  const cidScopes = shortCidScopes(short);
+  for (const pin of savePins) {
+    if (String(pin.keyvalues?.saver || '').toLowerCase() !== s) continue;
+    if (pin.keyvalues?.shortId === short.id) return true;
+    const sc = pin.keyvalues?.shortCid;
+    if (sc && cidScopes.has(sc)) return true;
+  }
+  return false;
+}
+
+/** Re-apply local upvotes whose IPFS pin is still in flight; drop confirmed/revoked entries. */
+export function reconcilePendingUpvotes(upvotePins) {
+  const pending = readPending();
+  if (!pending.upvotes.length) return;
+  const next = [];
+  for (const { shortId, voter } of pending.upvotes) {
+    const short = getShort(shortId);
+    if (!short) continue;
+    if (isUpvoteRevokedForShort(short, voter)) continue;
+    if (upvotePinMatches(upvotePins, short, voter)) continue;
+    upvoteShort(shortId, voter);
+    next.push({ shortId, voter });
+  }
+  if (next.length !== pending.upvotes.length) {
+    pending.upvotes = next;
+    writePending(pending);
+  }
+}
+
+/** Re-apply local saves whose IPFS pin is still in flight; drop confirmed/revoked entries. */
+export function reconcilePendingSaves(savePins) {
+  const pending = readPending();
+  if (!pending.saves.length) return;
+  const next = [];
+  for (const { shortId, saver } of pending.saves) {
+    const short = getShort(shortId);
+    if (!short) continue;
+    if (isSaveRevokedForShort(short, saver)) continue;
+    if (savePinMatches(savePins, short, saver)) continue;
+    saveShort(shortId, saver);
+    next.push({ shortId, saver });
+  }
+  if (next.length !== pending.saves.length) {
+    pending.saves = next;
+    writePending(pending);
+  }
 }
 
 export function allCategories() {
@@ -508,6 +684,10 @@ export function upsertRemoteShort({
     );
   }
   if (short) {
+    if (short.cid && cid && short.cid !== cid) {
+      recordCidAlias(short.cid, short.id);
+      updateUserFlagShortCid(short.id, cid);
+    }
     short.cid = cid;
     short.title = title ?? short.title;
     short.url = url ?? short.url;
@@ -543,10 +723,10 @@ export function upsertRemoteShort({
   return short;
 }
 
-export function upsertRemoteComment({ shortCid, commentCid, by, text, createdAt }) {
-  if (!shortCid) return null;
+export function upsertRemoteComment({ shortCid, shortId, commentCid, by, text, createdAt }) {
+  if (!shortCid && !shortId) return null;
   const state = read();
-  const short = findShort(state, { cid: shortCid });
+  const short = resolveShortForRemote(state, { shortCid, shortId });
   if (!short) return null;
   short.comments = short.comments || [];
   if (commentCid && isCommentRevoked(commentCid)) return short;
@@ -584,12 +764,14 @@ export function resetAllSaveCounts() {
   write(state);
 }
 
-export function upsertRemoteUpvote({ shortCid, voter }) {
-  if (!shortCid || !voter) return null;
-  if (isUpvoteRevoked(shortCid, voter)) return null;
+export function upsertRemoteUpvote({ shortCid, shortId, voter }) {
+  if ((!shortCid && !shortId) || !voter) return null;
   const state = read();
-  const short = findShort(state, { cid: shortCid });
+  const short = resolveShortForRemote(state, { shortCid, shortId });
   if (!short) return null;
+  if (isUpvoteRevokedForShort(short, voter)) return null;
+  if (shortCid && isUpvoteRevoked(shortCid, voter)) return null;
+  if (shortId && isUpvoteRevoked(shortId, voter)) return null;
   short.voters = short.voters || [];
   if (!short.voters.some((v) => v.toLowerCase() === voter.toLowerCase())) {
     short.voters.push(voter);
@@ -599,12 +781,14 @@ export function upsertRemoteUpvote({ shortCid, voter }) {
   return short;
 }
 
-export function upsertRemoteSave({ shortCid, saver }) {
-  if (!shortCid || !saver) return null;
-  if (isSaveRevoked(shortCid, saver)) return null;
+export function upsertRemoteSave({ shortCid, shortId, saver }) {
+  if ((!shortCid && !shortId) || !saver) return null;
   const state = read();
-  const short = findShort(state, { cid: shortCid });
+  const short = resolveShortForRemote(state, { shortCid, shortId });
   if (!short) return null;
+  if (isSaveRevokedForShort(short, saver)) return null;
+  if (shortCid && isSaveRevoked(shortCid, saver)) return null;
+  if (shortId && isSaveRevoked(shortId, saver)) return null;
   short.savers = short.savers || [];
   if (!short.savers.some((v) => v.toLowerCase() === saver.toLowerCase())) {
     short.savers.push(saver);
@@ -618,8 +802,7 @@ export function upsertRemoteFlag({ shortCid, shortId, flagCid, flagger, category
   if (!flagCid || isFlagRevoked(flagCid)) return null;
   if (!shortCid && !shortId) return null;
   const state = read();
-  let short = shortCid ? findShort(state, { cid: shortCid }) : null;
-  if (!short && shortId) short = findShort(state, { id: shortId });
+  let short = resolveShortForRemote(state, { shortCid, shortId });
   if (!short) return null;
   const m = ensureModeration(short);
   if (m.status === 'violated') return short;
@@ -651,12 +834,12 @@ export function upsertRemoteFlag({ shortCid, shortId, flagCid, flagger, category
   return short;
 }
 
-export function upsertRemoteModVote({ shortCid, voteCid, flagCid, voter, verdict, createdAt }) {
-  if (!shortCid || !voteCid || !flagCid || !voter || isFlagRevoked(flagCid)) return null;
+export function upsertRemoteModVote({ shortCid, shortId, voteCid, flagCid, voter, verdict, createdAt }) {
+  if ((!shortCid && !shortId) || !voteCid || !flagCid || !voter || isFlagRevoked(flagCid)) return null;
   const revoked = readRevoked();
   if (revoked.modVotes?.includes(voteCid)) return null;
   const state = read();
-  const short = findShort(state, { cid: shortCid });
+  const short = resolveShortForRemote(state, { shortCid, shortId });
   if (!short) return null;
   const m = ensureModeration(short);
   m.votes = m.votes || [];
@@ -676,10 +859,10 @@ export function upsertRemoteModVote({ shortCid, voteCid, flagCid, voter, verdict
   return short;
 }
 
-export function upsertRemoteRuling({ shortCid, rulingCid, outcome, flagger, ruling, ruledAt }) {
-  if (!shortCid || !outcome) return null;
+export function upsertRemoteRuling({ shortCid, shortId, rulingCid, outcome, flagger, ruling, ruledAt }) {
+  if ((!shortCid && !shortId) || !outcome) return null;
   const state = read();
-  const short = findShort(state, { cid: shortCid });
+  const short = resolveShortForRemote(state, { shortCid, shortId });
   if (!short) return null;
   const m = ensureModeration(short);
   if (m.status === 'violated' || m.status === 'cleared') return short;

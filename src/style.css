@@ -1602,17 +1602,31 @@ code {
   overflow-x: auto;
   margin: 0 -1rem;
   padding: 0;
-  --lb-cols: 2.75rem 1.75rem minmax(4.5rem, 1fr) 5rem 5rem repeat(5, 2.75rem);
+  width: 100%;
+  min-width: 0;
+  -webkit-overflow-scrolling: touch;
+}
+
+.leaderboard-table-inner {
+  display: grid;
+  grid-template-columns: var(--lb-cols);
+  width: max-content;
+  min-width: 100%;
+  --lb-cols:
+    2.75rem 1.75rem 6.5rem minmax(4.75rem, max-content) minmax(4.75rem, max-content)
+    repeat(5, 2.75rem);
 }
 
 .leaderboard-head,
+.leaderboard-list,
+.leaderboard-row-shell,
 .leaderboard-row {
+  grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: var(--lb-cols);
+  grid-template-columns: subgrid;
   align-items: center;
   gap: 0.45rem;
-  width: max-content;
-  min-width: max(100%, 28rem);
+  min-width: 0;
   box-sizing: border-box;
 }
 
@@ -1641,6 +1655,8 @@ code {
 .leaderboard-stat--crc {
   font-size: 0.8rem;
   white-space: nowrap;
+  justify-self: center;
+  padding: 0 0.15rem;
 }
 
 .leaderboard-head-avatar {
@@ -1679,14 +1695,10 @@ code {
 }
 
 .leaderboard-list {
-  display: flex;
-  flex-direction: column;
-  min-width: 100%;
+  min-width: 0;
 }
 
 .leaderboard-row-shell {
-  width: max-content;
-  min-width: 100%;
   border-bottom: 1px solid #f1f5f9;
 }
 
@@ -1731,13 +1743,25 @@ code {
 }
 
 .leaderboard-name.profile-link {
+  width: 100%;
   min-width: 0;
+  max-width: 6.5rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 500;
   text-align: left;
+  justify-self: start;
   padding: 0;
+}
+
+.leaderboard-head-user {
+  min-width: 0;
+  max-width: 6.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
 }
 
 .leaderboard-rank {
@@ -1759,10 +1783,6 @@ code {
 
 .leaderboard-avatar {
   flex-shrink: 0;
-}
-
-.leaderboard-head-user {
-  min-width: 0;
 }
 
 @media (max-width: 480px) {
@@ -1847,14 +1867,22 @@ code {
     padding-right: 0.4rem;
   }
 
-  .leaderboard-table-wrap {
-    --lb-cols: 2.5rem 1.5rem minmax(3.5rem, 1fr) 4.25rem 4.25rem repeat(5, 2.35rem);
+  .leaderboard-table-inner {
+    --lb-cols:
+      2.5rem 1.5rem 6rem minmax(4.25rem, max-content) minmax(4.25rem, max-content)
+      repeat(5, 2.35rem);
+  }
+
+  .leaderboard-name.profile-link,
+  .leaderboard-head-user {
+    max-width: 6rem;
   }
 
   .leaderboard-head,
+  .leaderboard-list,
+  .leaderboard-row-shell,
   .leaderboard-row {
     gap: 0.35rem;
-    min-width: max(100%, 24rem);
   }
 
   .leaderboard-stat--crc {
