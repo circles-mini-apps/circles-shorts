@@ -56,25 +56,33 @@ function shouldVerifyPayments() {
 async function verifyInteractPayment(from, to, createdAtMs) {
   if (!shouldVerifyPayments()) return true;
   if (!from || !to) return false;
-  return verifyInteractionPaymentForFeed({
-    rpcUrl: resolveFeedRpcUrl(),
-    from,
-    to,
-    minAttoCrc: INTERACT_ATTO,
-    createdAtMs,
-  });
+  try {
+    return await verifyInteractionPaymentForFeed({
+      rpcUrl: resolveFeedRpcUrl(),
+      from,
+      to,
+      minAttoCrc: INTERACT_ATTO,
+      createdAtMs,
+    });
+  } catch {
+    return false;
+  }
 }
 
 async function verifyFlagPayment(from, createdAtMs) {
   if (!shouldVerifyPayments()) return true;
   if (!from) return false;
-  return verifyCrcPayment({
-    rpcUrl: resolveFeedRpcUrl(),
-    from,
-    to: PLATFORM_ORG,
-    minAtto: FLAG_ATTO,
-    sinceMs: Math.max(0, (createdAtMs || Date.now()) - 24 * 60 * 60 * 1000),
-  });
+  try {
+    return await verifyCrcPayment({
+      rpcUrl: resolveFeedRpcUrl(),
+      from,
+      to: PLATFORM_ORG,
+      minAtto: FLAG_ATTO,
+      sinceMs: Math.max(0, (createdAtMs || Date.now()) - 24 * 60 * 60 * 1000),
+    });
+  } catch {
+    return false;
+  }
 }
 
 function resolveShortCreator({ shortCid, shortId, data, creatorByShortCid, creatorByShortId }) {

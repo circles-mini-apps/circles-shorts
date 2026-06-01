@@ -22,9 +22,12 @@ hydrateVideoDurationCache();
 refreshShorts();
 initUi();
 
-void syncFeed();
+onAppData((raw) => {
+  applyValidatedHostData(raw);
+  void syncFeed({ silent: true });
+});
 
-onAppData(applyValidatedHostData);
+void syncFeed();
 
 onWalletChange((address) => {
   handleWalletChange(address);

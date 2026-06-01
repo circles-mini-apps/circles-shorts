@@ -118,6 +118,14 @@ This runs `npm run build` and then `wrangler pages deploy dist --project-name=ci
 
 Paste the stable URL into the Circles miniapp host. **Do not** set `VITE_PINATA_JWT` in production builds — the Pinata key lives only on the server.
 
+### Browser “deceptive site” warning
+
+Chrome may flag `*.pages.dev` URLs that handle wallets or crypto. This is a **Google Safe Browsing** list entry on the domain, not malware in the app code. After deploying security fixes (server-side Pinata, no JWT in the bundle):
+
+1. Verify the site loads cleanly at https://circles-shorts.pages.dev
+2. Request a review: [Google Safe Browsing report error](https://safebrowsing.google.com/safebrowsing/report_error/?url=https://circles-shorts.pages.dev)
+3. Long term: attach a custom domain in Cloudflare Pages (e.g. `shorts.yourdomain.com`) — fewer false positives than `pages.dev`
+
 ### Cloudflare secrets (production)
 
 ```bash

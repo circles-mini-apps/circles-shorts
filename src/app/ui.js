@@ -849,7 +849,7 @@ function header() {
     <header class="topbar">
       <div class="brand">
         <button class="brand-btn" data-action="go-list" type="button">${APP_NAME}</button>
-        <span class="brand-meta muted">${escapeHtml(countLabel)}</span>
+        <span class="brand-meta muted">${escapeHtml(countLabel)} · community mini app</span>
         ${demo}
       </div>
       <div class="topbar-right">${notificationsPanelHtml()}${walletBtn}</div>
