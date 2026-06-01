@@ -447,8 +447,7 @@ export async function deleteUpload(shortId) {
     state.editingShortId = null;
     clearPendingDeleteShort();
     setStatus('success', 'Short deleted.');
-    setProfileTab('published');
-    setView('profile', null, { profileAddress: from });
+    setView('list');
     void unpinShortFromIpfs(short, from).catch((err) => {
       // eslint-disable-next-line no-console
       console.warn('IPFS unpin failed', err);
